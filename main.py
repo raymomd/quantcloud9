@@ -174,6 +174,8 @@ class SectorCN(enum.Enum):
     sector_007370 = '007370'
     # 007369 碳化硅
     sector_007369 = '007369'
+    # 007359 碳交易
+    sector_0073259 = '007359'
 
 
 sectornames_CN = {SectorCN.sector_000001: "优选股关注",
@@ -211,7 +213,8 @@ sectornames_CN = {SectorCN.sector_000001: "优选股关注",
                   SectorCN.sector_007152: "燃料电池",
                   SectorCN.sector_007307: "HIT电池",
                   SectorCN.sector_007370: "光伏建筑一体化",
-                  SectorCN.sector_007369: "碳化硅"}
+                  SectorCN.sector_007369: "碳化硅",
+                  SectorCN.sector_0073259: "碳交易"}
 
 
 class SectorUS(enum.Enum):
@@ -325,8 +328,8 @@ def inserttab(exchange: str, symbol: str, stock_df: pd.DataFrame, datasource: Da
             if DataContext.iscountryUS():
                 csr.execute(statement_start + exchange + "_tbl (gid,crt_time,open,close,high,low,volume) " +
                             "values (%s,%s,%s,%s,%s,%s,%s) on conflict on constraint time_key_" + exchange + " do nothing;",
-                            (str(symbol), str(each_time), "{:.2f}".format(stock_open[count]), "{:.2f}".format(stock_close[count]),
-                            "{:.2f}".format(stock_high[count]), "{:.2f}".format(stock_low[count]), str(stock_volume[count])))
+                            (str(symbol), str(each_time), "{:.4f}".format(stock_open[count]), "{:.4f}".format(stock_close[count]),
+                            "{:.4f}".format(stock_high[count]), "{:.4f}".format(stock_low[count]), str(stock_volume[count])))
             elif DataContext.iscountryChina():
                 csr.execute(statement_start + exchange + "_tbl (gid,crt_time,open,close,high,low,volume) " +
                             "values (%s,%s,%s,%s,%s,%s,%s) on conflict on constraint time_key_" + exchange + " do nothing;",
@@ -365,8 +368,8 @@ def inserttab(exchange: str, symbol: str, stock_df: pd.DataFrame, datasource: Da
             if DataContext.iscountryUS():
                 csr.execute(statement_start + exchange + "_tbl_30 (gid,crt_time,open,close,high,low,volume) " +
                             "values (%s,%s,%s,%s,%s,%s,%s) on conflict on constraint time_key_" + exchange + "_30 do nothing;",
-                            (str(symbol), str(stock_day[next_idx]), "{:.2f}".format(open_value), "{:.2f}".format(close_value),
-                            "{:.2f}".format(high_value), "{:.2f}".format(low_value), str(volume_value)))
+                            (str(symbol), str(stock_day[next_idx]), "{:.4f}".format(open_value), "{:.4f}".format(close_value),
+                            "{:.4f}".format(high_value), "{:.4f}".format(low_value), str(volume_value)))
             elif DataContext.iscountryChina():
                 csr.execute(statement_start + exchange + "_tbl_30 (gid,crt_time,open,close,high,low,volume) " +
                             "values (%s,%s,%s,%s,%s,%s,%s) on conflict on constraint time_key_" + exchange + "_30 do nothing;",
@@ -425,9 +428,9 @@ def insertdata(exchange: str, group: str, symbols: list, retried, datasource: Da
             elif datasource == DataSource.EAST_MONEY:
                 symbol_internal = ".".join([str(symbol_i), group])
                 stock_zh_df_tmp = c.cmc(symbol_internal, "OPEN,HIGH,LOW,CLOSE,VOLUME,TIME",
-                                        (datetime.datetime.today() - datetime.timedelta(days=5)).strftime("%Y-%m-%d"),
+                                        (datetime.datetime.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
                                         datetime.datetime.today().strftime("%Y-%m-%d"),
-                                        "AdjustFlag=3,RowIndex=2,Period=15,IsHistory=1,Ispandas=1")
+                                        "AdjustFlag=1,RowIndex=2,Period=15,IsHistory=1,Ispandas=1")
                 if isinstance(stock_zh_df_tmp, c.EmQuantData) and stock_zh_df_tmp.ErrorCode != 0:
                     logger.error("it is failed to get stock data for {} {} and error code is {} error message is {}".
                                  format(symbol_i, exchange_group, stock_zh_df_tmp.ErrorCode, stock_zh_df_tmp.ErrorMsg))
@@ -448,6 +451,7 @@ def insertdata(exchange: str, group: str, symbols: list, retried, datasource: Da
             if isinstance(stock_us_df_tmp, pd.DataFrame):
                 inserttab(exchange, symbol_i, stock_us_df_tmp, datasource)
                 inserttab(exchange, symbol_i, stock_us_df_tmp, datasource, period=30)
+
 
 def insertdata_continue(exchange: str, group: str, symbols: list, c_point: str, retried, datasource: DataSource,
                         period: str = '15', adjust: str = "qfq"):
@@ -569,7 +573,7 @@ def reloaddata(stocks, datasource: DataSource = DataSource.EAST_MONEY):
 def checksymbols(*indicators: str):
     logger.info("start to check if there are new stocks on market.")
     for indicator in indicators:
-        # TODO need to use old verion of function selectgroup
+        # TODO need to use old version of function selectgroup
         group_mark, symbols = selectgroup(indicator)
         print(symbols)
         symbol_path = symbol_paths[stock_group[indicator]]
@@ -935,7 +939,6 @@ class OBVUpACTION(ActionBase):
 
         return ret_valid, total_value
 
-
     def executeaction(self, **kwargs):
         occurnaces = kwargs['occurance_time']
         obv_p = kwargs['obv_period']
@@ -1028,7 +1031,9 @@ class DataContext:
                         2487, 601991, 300443, 2223, 300210, 27, 628, 600739, 532, 601377,
                         300690, 421, 690, 987, 600961, 600198, 605358, 600460, 2151, 688126,
                         300236, 688258, 603690, 300077, 300139, 688981, 300671, 688233, 600206, 688595,
-                        300706, 300333, 603005, 2371, 300493, 600667, 300661, 688123, 300548, 600360]
+                        300706, 300333, 603005, 2371, 300493, 600667, 300661, 688123, 300548, 600360,
+                        603806, 600517, 875, 601908, 601222, 601012, 601615, 603218, 27, 600008,
+                        688599, 300185, 300850, 400, 300815, 625, 2266, 601877, 881]
 
     @classmethod
     def initklz(cls, country_param: CountryCode):
@@ -1442,9 +1447,8 @@ def snapshot(context: DataContext):
                     else:
                         sum_volume += dataset.iloc[start + j]['volume']
             except Exception as ee:
-                logger.error("error >>>", ee)
                 # traceback.print_exc()
-                logger.error("Symbol error occurred with {}".format(dataset.iloc[-1]['gid']))
+                logger.error("Symbol error occurred with {} error message is {}".format(dataset.iloc[-1]['gid'], ee))
             return sum_volume
 
         def updateexistingrow(firstk: bool, barcounter: int, dataset: pd.DataFrame):
@@ -1611,23 +1615,35 @@ def snapshot(context: DataContext):
                 logger.debug("update stock data in context")
                 # 3) calculate indicators
                 logger.debug("run 2 strategies")
-                result = {current_time: quantstrategies(context)}
+                try:
+                    result = {current_time: quantstrategies(context)}
+                except Exception as ee:
+                    logger.error("It is failed to execute quantitative strategies. error >>>", ee)
+                    traceback.print_exc()
+
+                else:
+                    logger.info("execute quantitative strategies successfully.")
                 context.queue.put(result)
                 logger.debug("send result to another thread to handle and sleep")
                 if closetime - current_time > datetime.timedelta(minutes=5):
+                    logger.debug("start to sleep with 3 minutes")
                     time.sleep(180)
+                    logger.debug("sleep is done with 3 minutes")
                 else:
+                    logger.debug("start to sleep with 45 seconds")
                     time.sleep(45)
+                    logger.debug("sleep is done with 45 minutes")
             elif stock_data.ErrorCode != 0:
                 logger.debug("Request csqsnapshot Error error code is {}; error message is {}; codes is {}".
                              format(stock_data.ErrorCode, stock_data.ErrorMsg, stock_data.Codes))
                 if stock_data.ErrorCode == 10002008 or stock_data.ErrorMsg.find('timeout') != -1:
-                    logger.debug("timeout occurred so sleep 180 seconds")
+                    logger.debug("timeout occurred so sleep 180 seconds and then logout")
                     logout_em()
                     time.sleep(180)
+                    logger.debug("login again after sleeping 180")
                     login_em()
-                time.sleep(5)
-                continue
+                time.sleep(30)
+                logger.debug("sleep of 30 is done due to error occurring during requesting csqsnapshot")
         elif (current_time - closetime) >= target_time:
             logger.debug("market is closed so that snapshot quits")
             context.queue.put(ProcessStatus.STOP)
@@ -1679,6 +1695,8 @@ def quantstrategies(context: DataContext):
                                                                k_period=context.k_period,
                                                                d_period=context.d_period, crossvalue=(False, 0))
                     if valid:
+                        # FIXME
+                        '''
                         if len(result_tmp) > 0:
                             obv_up = OBVUpACTION(context.data30mins[sector_tmp].get(symbol_tmp))
                             valid, result_tmp = obv_up.executeaction(occurance_time=result_tmp['time'],
@@ -1690,6 +1708,10 @@ def quantstrategies(context: DataContext):
                                     resultdata[symbol_tmp] = results
                             else:
                                 logger.error("strategy_obv_up_30 is failed on {}".format(symbol_tmp))
+                        '''
+                        if len(result_tmp) > 0:
+                            results[DataContext.strategy1] = result_tmp
+                            resultdata[symbol_tmp] = results
                     else:
                         logger.error("strategy_cross_kd_30 is failed on {}".format(symbol_tmp))
             else:
@@ -1725,8 +1747,9 @@ def handleresult(context: DataContext):
             logger.debug("The thread of handleresult quits")
             break
         subject_e1, content_e1, subject_e2, content_e2 = handleresultlocked(megeresult(context, resultfromq), context)
-        # send it via sina email
 
+        logger.debug("handleresultlocked was done")
+        # send it via sina email
         time_cur = datetime.datetime.now()
         if datetime.datetime.combine(datetime.date(year=time_cur.year, month=time_cur.month, day=time_cur.day),
                                      context.marketclosetime) - time_cur <= datetime.timedelta(minutes=DataContext.sendemial_interval) \
@@ -1775,8 +1798,8 @@ def megeresult(context: DataContext, result_transient, ishistory: bool = False):
     result_c_s2 = set(symbols[DataContext.strategy2])
     result_h_s2 = set(context.totalresult[DataContext.strategy2].keys()) - result_c_s2
     logger.info("%d symbols found with strategy 2 at %s" % (len(result_c_s2), keytime))
-    result_c_s1_2 = result_c_s2.intersection(result_c_s1)
-    result_h_s1_2 = result_h_s2.intersection(result_h_s1)
+    result_c_s1_2 = result_c_s1.intersection(result_c_s2).union(result_c_s1.intersection(result_h_s2))
+    result_h_s1_2 = result_h_s1.intersection(result_h_s2).union(result_h_s1.intersection(result_c_s2))
     logger.info("%d symbols found with strategy 1 and 2 at %s" % (len(result_c_s1_2), keytime))
     ret = {keytime: {DataContext.strategy1_2: [result_c_s1_2, result_h_s1_2],
                      DataContext.strategy1: [result_c_s1, result_h_s1],
@@ -1876,11 +1899,12 @@ def handleresultlocked(resultf, context: DataContext):
             for strategy_t, symbols_l in result.items():
                 str101 = ""
                 if strategy_t == DataContext.strategy1:
-                    str101 = "策略1 - 预警条件为:\r\n"
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略1 - 预警条件为:\r\n"
                     str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
                     str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
-                    str101 += "  3. KD指标在30分钟周期形成金叉\r\n"
-                    str101 += "  4. OBV指标在30分钟周期大于零且大于30天均值\r\n\r\n"
+                    str101 += "  3. KD指标在30分钟周期形成金叉\r\n\r\n"
+                    # FIXME
+                    # str101 += "  4. OBV指标在30分钟周期大于零且大于30天均值\r\n\r\n"
                 elif strategy_t == DataContext.strategy2:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略2 - 预警条件为:\r\n"
                     str101 += "  1. 收盘价在60分钟周期不大于50\r\n"
@@ -2000,6 +2024,7 @@ def login_em(isforcelogin: bool=True):
         logger.error("error >>>", ee)
         logger.error("Choice quant -- login failed.")
         traceback.print_exc()
+        login_em()
     else:
         logger.info("Choice quant -- login successful.")
 
@@ -2105,10 +2130,10 @@ def backtest(context: DataContext):
 
 
 if __name__ == '__main__':
-    # DataContext.initklz(CountryCode.CHINA)
-    # loaddata(DataContext.markets, 2, datasource=DataSource.AK_SHARE)
+    #DataContext.initklz(CountryCode.CHINA)
+    #loaddata(DataContext.markets, 2, datasource=DataSource.AK_SHARE)
     # loaddata(["创业板"], 3, c_point=300470, datasource=DataSource.EAST_MONEY)
-    # loaddata(["创业板", "中小企业板", "主板A股", "主板"], 2, datasource=DataSource.EAST_MONEY)
+    # loaddata(["创业板"], 2, datasource=DataSource.EAST_MONEY)
 
     dcon = pre_exec(CountryCode.CHINA)
     # dcon = pre_exec(CountryCode.US)
@@ -2124,14 +2149,12 @@ if __name__ == '__main__':
     # DataContext.initklz(CountryCode.CHINA)
     # backtest(DataContext())
     # calconhistory(DataContext())
-
     '''
     login_em()
     DataContext.initklz(CountryCode.CHINA)
     updatedatabase()
     logout_em()
     '''
-
     # DataContext.country = CountryCode.US
     # loaddata(["NASDAQ", "NYSE", "AMEX"], 2, datasource=DataSource.YAHOO)
     # loaddata(["NASDAQ"], 3, c_point='AMBA', datasource=DataSource.YAHOO)
