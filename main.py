@@ -892,6 +892,69 @@ class CROSSUpKDAction(ActionBase):
         return ret_valid, ret_value
 
 
+class EntangleKDACtion(ActionBase):
+    def __init__(self, data: pd.DataFrame):
+        super().__init__(data)
+
+    def __comparevalue(self, kd_results: list, periods: int):
+        ret = True
+        for i in range(periods):
+            k_v = kd_results[i][0]
+            d_v = kd_results[i][1]
+            if k_v != 0 and d_v != 0:
+                if k_v > d_v:
+                    ret &= abs((k_v - d_v) / k_v) <= 0.15
+                else:
+                    ret &= abs((d_v - k_v) / d_v) <= 0.15
+            else:
+                if k_v == d_v:
+                    pass
+                elif k_v == 0:
+                    ret &= abs(d_v) < 2
+                else:
+                    ret &= abs(k_v) < 2
+        return ret
+
+    def executeaction(self, **kwargs):
+        occurnaces = kwargs['occurance_time']
+        rsv_p = kwargs['rsv_period']
+        k_p = kwargs['k_period']
+        d_p = kwargs['d_period']
+        c_v = kwargs['crossvalue']
+        periods = kwargs['periods']
+        ret_valid = False
+        ret_value = pd.DataFrame(columns=columns)
+        kd_indicator = KDAction(self._data, rsv_p, k_p, d_p)
+        for time_stamp in occurnaces:
+            index_t = self.getindex(time_stamp)
+            kd_results = []
+            for i in range(periods):
+                cur_index = index_t - i
+                if cur_index < 0:
+                    break
+                cur_timestamp = self._data.index[cur_index]
+                valid1, k_v, d_v = kd_indicator.executeaction(timestamp=cur_timestamp)
+                if valid1:
+                    ret_valid = True
+                    if c_v[0]:
+                        if k_v <= c_v[1] and d_v <= c_v[1]:
+                            kd_results.append((k_v, d_v))
+                        else:
+                            break
+                    else:
+                        kd_results.append((k_v, d_v))
+                else:
+                    ret_valid = False
+                    break
+            else:
+                if self.__comparevalue(kd_results, periods):
+                    row = self._data.loc[time_stamp]
+                    ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
+                                                     row['high'], row['low'], row['volume'],
+                                                     time_stamp, True]
+        return ret_valid, ret_value
+
+
 class OBVAction(ActionBase):
     def __init__(self, data: pd.DataFrame, obv_period: int):
         super().__init__(data)
@@ -1017,6 +1080,7 @@ class DataContext:
     sendemial_interval = 6
     strategy1 = 'strategy1'
     strategy2 = 'strategy2'
+    strategy3 = 'strategy3'
     strategy1_2 = 'strategy1and2'
 
     code_spotlighted = [7171, 2901, 300571, 2634, 300771, 603871, 603165, 603755, 2950, 688178,
@@ -1200,7 +1264,7 @@ class DataContext:
                                      stock_group["AMEX"]: self.symbols_exchange_l_amex}
 
         self.sendemailtime: datetime.datetime = None
-        self.totalresult = {DataContext.strategy1: {}, DataContext.strategy2: {}}
+        self.totalresult = {DataContext.strategy1: {}, DataContext.strategy2: {}, DataContext.strategy3: {}}
         self.sectors = {}
 
         logger.debug("Initialization of context is done.")
@@ -1614,7 +1678,7 @@ def snapshot(context: DataContext):
                     updatestockdata(stock_data)
                 logger.debug("update stock data in context")
                 # 3) calculate indicators
-                logger.debug("run 2 strategies")
+                logger.debug("run 3 strategies")
                 try:
                     result = {current_time: quantstrategies(context)}
                 except Exception as ee:
@@ -1654,7 +1718,7 @@ def snapshot(context: DataContext):
             print("total number of retrieving data is %d" % fetchdatacounter)
             break
         else:
-            # logger.debug("market is not open or break is ongoing so that await. Now is {}".format(current_time))
+            logger.debug("market is not open or break is ongoing so that await. Now is {}".format(current_time))
             time.sleep(10)
 
 # TODO refactor below codes with command-chain pattern
@@ -1728,7 +1792,20 @@ def quantstrategies(context: DataContext):
                     results[DataContext.strategy2] = result_tmp_60
                     resultdata[symbol_tmp] = results
             else:
-                logger.error("strategy_cross_kd_and_greater_than_threshold_60 is failed on {}".format(symbol_tmp))
+                logger.error("strategy_cross_kd_60 is failed on {}".format(symbol_tmp))
+
+            kd_entangle_value = EntangleKDACtion(dataset_60)
+            valid_60_entangle, result_entangle_60 = kd_entangle_value.executeaction(occurance_time=[dataset_60.index[-1]],
+                                                                                    rsv_period=context.rsv_period,
+                                                                                    k_period=context.k_period,
+                                                                                    d_period=context.d_period,
+                                                                                    crossvalue=(True, 30), periods=4)
+            if valid_60_entangle:
+                if len(result_entangle_60) > 0:
+                    results[DataContext.strategy3] = result_entangle_60
+                    resultdata[symbol_tmp] = results
+            else:
+                logger.error("strategy_entangle_kd_60 is failed on {}".format(symbol_tmp))
 
         totalresultdata[sector_tmp] = resultdata
     return totalresultdata
@@ -1746,7 +1823,7 @@ def handleresult(context: DataContext):
         if isinstance(resultfromq, ProcessStatus) and resultfromq == ProcessStatus.STOP:
             logger.debug("The thread of handleresult quits")
             break
-        subject_e1, content_e1, subject_e2, content_e2 = handleresultlocked(megeresult(context, resultfromq), context)
+        subject_e1, content_e1, subject_e2, content_e2 = handleresultlocked(mergeresult(context, resultfromq), context)
 
         logger.debug("handleresultlocked was done")
         # send it via sina email
@@ -1769,8 +1846,16 @@ class CalcResult:
 
 
 # TODO remove duplicate item from totalreuslt
-def megeresult(context: DataContext, result_transient, ishistory: bool = False):
-    symbols = {DataContext.strategy1: [], DataContext.strategy2: []}
+def mergeresult(context: DataContext, result_transient, ishistory: bool = False):
+    def assembleFunc(symbol, strategy: str):
+        symbol_s = str(symbol)
+        symbols[strategy].append(symbol_s)
+        if ishistory:
+            append_value(context.totalresult[strategy], symbol_s, CalcResult(row[6], row[7]))
+        else:
+            append_value(context.totalresult[strategy], symbol_s, CalcResult(time_result, row[7]))
+
+    symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: []}
     for time_result, result in result_transient.items():
         keytime = time_result
         for index, value in result.items():
@@ -1779,18 +1864,14 @@ def megeresult(context: DataContext, result_transient, ishistory: bool = False):
                     if index_2 == DataContext.strategy1:
                         for row in value_2.itertuples(index=False):
                             if row[7]:
-                                index_s = str(index_1)
-                                symbols[DataContext.strategy1].append(index_s)
-                                if ishistory:
-                                    append_value(context.totalresult[DataContext.strategy1], index_s, CalcResult(row[6], row[7]))
-                                else:
-                                    append_value(context.totalresult[DataContext.strategy1], index_s, CalcResult(time_result, row[7]))
+                                assembleFunc(index_1, DataContext.strategy1)
                     elif index_2 == DataContext.strategy2:
                         for row in value_2.itertuples(index=False):
                             if row[2] <= 50:
-                                index_s = str(index_1)
-                                symbols[DataContext.strategy2].append(index_s)
-                                append_value(context.totalresult[DataContext.strategy2], index_s, "close is {}".format(row[2]))
+                                assembleFunc(index_1, DataContext.strategy2)
+                    elif index_2 == DataContext.strategy3:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy3)
 
     result_c_s1 = set(symbols[DataContext.strategy1])
     result_h_s1 = set(context.totalresult[DataContext.strategy1].keys()) - result_c_s1
@@ -1798,10 +1879,14 @@ def megeresult(context: DataContext, result_transient, ishistory: bool = False):
     result_c_s2 = set(symbols[DataContext.strategy2])
     result_h_s2 = set(context.totalresult[DataContext.strategy2].keys()) - result_c_s2
     logger.info("%d symbols found with strategy 2 at %s" % (len(result_c_s2), keytime))
+    result_c_s3 = set(symbols[DataContext.strategy3])
+    result_h_s3 = set(context.totalresult[DataContext.strategy3].keys()) - result_c_s3
+    logger.info("%d symbols found with strategy 3 at %s" % (len(result_c_s3), keytime))
     result_c_s1_2 = result_c_s1.intersection(result_c_s2).union(result_c_s1.intersection(result_h_s2))
     result_h_s1_2 = result_h_s1.intersection(result_h_s2).union(result_h_s1.intersection(result_c_s2))
     logger.info("%d symbols found with strategy 1 and 2 at %s" % (len(result_c_s1_2), keytime))
-    ret = {keytime: {DataContext.strategy1_2: [result_c_s1_2, result_h_s1_2],
+    ret = {keytime: {DataContext.strategy3: [result_c_s3, result_h_s3],
+                     DataContext.strategy1_2: [result_c_s1_2, result_h_s1_2],
                      DataContext.strategy1: [result_c_s1, result_h_s1],
                      DataContext.strategy2: [result_c_s2, result_h_s2]}}
     return ret
@@ -1898,7 +1983,10 @@ def handleresultlocked(resultf, context: DataContext):
         with open(filepath, 'w+') as file:
             for strategy_t, symbols_l in result.items():
                 str101 = ""
-                if strategy_t == DataContext.strategy1:
+                if strategy_t == DataContext.strategy3:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略3 - 预警条件为:\r\n"
+                    str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n\r\n"
+                elif strategy_t == DataContext.strategy1:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略1 - 预警条件为:\r\n"
                     str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
                     str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
@@ -1939,7 +2027,7 @@ def calconhistory(context: DataContext):
     login_em()
     loadsectors(context)
     result = {datetime.datetime.now(): quantstrategies(context)}
-    handleresultlocked(megeresult(context, result, ishistory=True), context)
+    handleresultlocked(mergeresult(context, result, ishistory=True), context)
     logout_em()
 
 
@@ -2130,8 +2218,8 @@ def backtest(context: DataContext):
 
 
 if __name__ == '__main__':
-    #DataContext.initklz(CountryCode.CHINA)
-    #loaddata(DataContext.markets, 2, datasource=DataSource.AK_SHARE)
+    # DataContext.initklz(CountryCode.CHINA)
+    # loaddata(DataContext.markets, 2, datasource=DataSource.AK_SHARE)
     # loaddata(["创业板"], 3, c_point=300470, datasource=DataSource.EAST_MONEY)
     # loaddata(["创业板"], 2, datasource=DataSource.EAST_MONEY)
 
