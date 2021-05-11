@@ -789,47 +789,55 @@ class KDAction(ActionBase):
         self.__rsv_period = rsvperiod
         self.__k_period = kperiod
         self.__d_period = dperiod
+        self.__llvaction = LLVAction(self._data, self.__rsv_period)
+        self.__hhvaction = HHVAction(self._data, self.__rsv_period)
+        self.__k_v = [None for i in range(len(self._data.index))]
+        self.__d_v = [None for i in range(len(self._data.index))]
 
-    def calck(self, index, llva, hhva):
-        valid = True
+    def rsv(self, index):
         ret = 0
-        if index - (self.__k_period -1) < 0:
-            valid = False
-            return valid, ret
-        for i in range(self.__k_period):
-            index_internal = index - i
-            valid1, result_llv = llva.executeaction(fn_ticker=self.low_ticker, index_c=index_internal)
-            if not valid1:
-                valid = False
-                break
-            valid2, result_hhv = hhva.executeaction(fn_ticker=self.high_ticker, index_c=index_internal)
-            if not valid2:
-                valid = False
-                break
-            ret += (self.close_ticker(index_internal)-result_llv)/(result_hhv-result_llv)*100
+        valid1, result_llv = self.__llvaction.executeaction(fn_ticker=self.low_ticker, index_c=index)
+        if not valid1:
+            return valid1, ret
+        valid2, result_hhv = self.__hhvaction.executeaction(fn_ticker=self.high_ticker, index_c=index)
+        if not valid2:
+            return valid2, ret
+        ret = (self.close_ticker(index) - result_llv) / (result_hhv - result_llv) * 100
+        return True, ret
 
-        return valid, ret/self.__k_period
+    def kvalue(self, index):
+        valid = False
+        ret = None
+        if index < self.__rsv_period - 1 or index >= len(self.__k_v):
+            logger.error("index is invalid in kvalue", index)
+        else:
+            ret = self.__k_v[index]
+            if ret is not None:
+                valid = True
+        return valid, ret
+
+    def sma(self, fnf, n, m, index, values):
+        if index < self.__rsv_period - 1:
+            logger.error("index must be greater than %d for KD in sma", self.__rsv_period - 1)
+            return False
+        valid_r, value_r = fnf(index)
+        k_t_v = False
+        if valid_r:
+            if index == self.__rsv_period -1:
+                values[index] = (value_r*m + 50*(n-m))/n
+                k_t_v = True
+            else:
+                index_p = index - 1
+                k_t_v = self.sma(fnf, n, m, index_p, values)
+                if k_t_v:
+                    values[index] = (value_r*m + values[index_p]*(n-m))/n
+        return valid_r and k_t_v
 
     def executeaction(self, **kwargs):
-        ts = kwargs['timestamp']
-        llvaction = LLVAction(self._data, self.__rsv_period)
-        hhvaction = HHVAction(self._data, self.__rsv_period)
-        ret_v = False
-        ret_k = None
-        ret_d = None
-        index = self.getindex(ts)
-        ret_v, ret_k = self.calck(index, llvaction, hhvaction)
-        if ret_v:
-            total_v = 0
-            for i in range(self.__d_period):
-                index_internal = index - i
-                ret_v, result = self.calck(index_internal, llvaction, hhvaction)
-                if not ret_v:
-                    break
-                total_v += result
-            else:
-                ret_d = total_v/self.__d_period
-        return ret_v, ret_k, ret_d
+        index = len(self._data.index)-1
+        ret_v = self.sma(self.rsv, self.__k_period, 1, index, self.__k_v)
+        ret_v &= self.sma(self.kvalue, self.__d_period, 1, index, self.__d_v)
+        return ret_v, self.__k_v, self.__d_v
 
 
 class CROSSUpKDAction(ActionBase):
@@ -838,13 +846,10 @@ class CROSSUpKDAction(ActionBase):
 
     def __comparevalue(self, k_cur: float64, d_cur: float64,
                        k_pre: float64, d_pre: float64,
-                       k_pre2: float64, d_pre2: float64,
-                       k_next: float64, d_next: float64):
+                       k_pre2: float64, d_pre2: float64):
         condition = k_cur > k_pre and k_cur > d_cur and k_pre <= d_pre
         if k_pre2 is not None and d_pre2 is not None:
             condition |= k_cur > k_pre == d_pre and k_pre2 <= d_pre2
-        if k_next is not None and d_next is not None:
-            condition |= k_cur > k_pre and k_cur == d_cur and k_next > d_next
         return condition
 
     def executeaction(self, **kwargs):
@@ -857,38 +862,34 @@ class CROSSUpKDAction(ActionBase):
         ret_value = pd.DataFrame(columns=columns)
         kd_indicator = KDAction(self._data, rsv_p, k_p, d_p)
         for time_stamp in occurnaces:
-            valid1, k_v, d_v = kd_indicator.executeaction(timestamp=time_stamp)
+            valid1, k_v, d_v = kd_indicator.executeaction()
             if valid1:
-                cur_index = self.getindex(time_stamp)
-                pre_index = cur_index - 1
-                if pre_index < 0:
+                index_c = self.getindex(time_stamp)
+                index_p, index_p2 = (index_c-1, index_c-2)
+                if k_v[index_c] is None or d_v[index_c] is None or index_p < 0 or k_v[index_p] is None or d_v[index_p] is None:
                     continue
-                pre_time_stamp = self._data.index[pre_index]
-                valid2, k_p_v, d_p_v = kd_indicator.executeaction(timestamp=pre_time_stamp)
-                k_p2_v = d_p2_v = k_n_v = d_n_v = None
-                pre2_index = pre_index - 1
-                if pre2_index >= 0:
-                    pre2_time_stamp = self._data.index[pre2_index]
-                    valid3, k_p2_v, d_p2_v = kd_indicator.executeaction(timestamp=pre2_time_stamp)
-                next_index = cur_index + 1
-                if next_index < len(self._data.index):
-                    next_time_stamp = self._data.index[next_index]
-                    valid4, k_n_v, d_n_v = kd_indicator.executeaction(timestamp=next_time_stamp)
-                if valid2:
-                    ret_valid = True
-                    if self.__comparevalue(k_v, d_v, k_p_v, d_p_v, k_p2_v, d_p2_v, k_n_v, d_n_v):
-                        if c_v[0]:
-                            if (not (k_v > c_v[1] and k_p_v > c_v[1]) and not (d_v > c_v[1] and d_p_v > c_v[1])) \
-                                    or (k_p2_v is not None and d_p2_v is not None and k_p_v < c_v[1] and d_p_v < c_v[1]):
-                                row = self._data.loc[time_stamp]
-                                ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
-                                                                 row['high'], row['low'], row['volume'],
-                                                                 time_stamp, True]
-                        else:
+                k_c_v = k_v[index_c]
+                d_c_v = d_v[index_c]
+                k_p_v = k_v[index_p]
+                d_p_v = d_v[index_p]
+                k_p2_v = d_p2_v = None
+                if index_p2 >= 0:
+                    k_p2_v = k_v[index_p2]
+                    d_p2_v = d_v[index_p2]
+                ret_valid = True
+                if self.__comparevalue(k_c_v, d_c_v, k_p_v, d_p_v, k_p2_v, d_p2_v):
+                    if c_v[0]:
+                        if (not (k_c_v[0] > c_v[1] and k_p_v > c_v[1]) and not (d_c_v > c_v[1] and d_p_v > c_v[1])) \
+                                or (k_p2_v is not None and d_p2_v is not None and k_p_v < c_v[1] and d_p_v < c_v[1]):
                             row = self._data.loc[time_stamp]
                             ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
                                                              row['high'], row['low'], row['volume'],
                                                              time_stamp, True]
+                    else:
+                        row = self._data.loc[time_stamp]
+                        ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
+                                                         row['high'], row['low'], row['volume'],
+                                                         time_stamp, True]
         return ret_valid, ret_value
 
 
@@ -926,32 +927,34 @@ class EntangleKDACtion(ActionBase):
         ret_value = pd.DataFrame(columns=columns)
         kd_indicator = KDAction(self._data, rsv_p, k_p, d_p)
         for time_stamp in occurnaces:
-            index_t = self.getindex(time_stamp)
             kd_results = []
-            for i in range(periods):
-                cur_index = index_t - i
-                if cur_index < 0:
-                    break
-                cur_timestamp = self._data.index[cur_index]
-                valid1, k_v, d_v = kd_indicator.executeaction(timestamp=cur_timestamp)
-                if valid1:
-                    ret_valid = True
-                    if c_v[0]:
-                        if k_v <= c_v[1] and d_v <= c_v[1]:
-                            kd_results.append((k_v, d_v))
+            valid1, k_v, d_v = kd_indicator.executeaction()
+            if valid1:
+                ret_valid = True
+                index_c = self.getindex(time_stamp)
+                for i in range(periods):
+                    index_t = index_c - i
+                    if index_t < 0:
+                        break;
+                    k_v_t = k_v[index_t]
+                    d_v_t = d_v[index_t]
+                    if k_v_t is not None and d_v_t is not None:
+                        if c_v[0]:
+                            if k_v_t <= c_v[1] and d_v_t <= c_v[1]:
+                                kd_results.append((k_v_t, d_v_t))
+                            else:
+                                break
                         else:
-                            break
+                            kd_results.append((k_v_t, d_v_t))
                     else:
-                        kd_results.append((k_v, d_v))
+                        break
                 else:
-                    ret_valid = False
-                    break
-            else:
-                if self.__comparevalue(kd_results, periods):
-                    row = self._data.loc[time_stamp]
-                    ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
-                                                     row['high'], row['low'], row['volume'],
-                                                     time_stamp, True]
+                    if self.__comparevalue(kd_results, periods):
+                        row = self._data.loc[time_stamp]
+                        ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
+                                                         row['high'], row['low'], row['volume'],
+                                                         time_stamp, True]
+
         return ret_valid, ret_value
 
 
@@ -1105,7 +1108,7 @@ class DataContext:
         if DataContext.iscountryChina():
             DataContext.limitfordatafetched = 160
             DataContext.limitfordatafetched_30 = 120
-            DataContext.limitfordatafetched_60 = 16
+            DataContext.limitfordatafetched_60 = 80
             DataContext.markets = ["科创板", "创业板", "中小企业板", "主板A股", "主板"]
             DataContext.marketopentime = datetime.time(hour=9, minute=30)
             DataContext.marketclosetime = datetime.time(hour=15)
@@ -1782,6 +1785,9 @@ def quantstrategies(context: DataContext):
                 logger.error("strategy_cross_70 is failed on {}".format(symbol_tmp))
 
             dataset_60 = context.data60mins[sector_tmp].get(symbol_tmp)
+            if len(dataset_60) == 0:
+                continue
+
             kd_cross_value = CROSSUpKDAction(dataset_60)
             valid_60, result_tmp_60 = kd_cross_value.executeaction(occurance_time=[dataset_60.index[-1]],
                                                                    rsv_period=context.rsv_period,
@@ -1795,7 +1801,7 @@ def quantstrategies(context: DataContext):
                 logger.error("strategy_cross_kd_60 is failed on {}".format(symbol_tmp))
 
             kd_entangle_value = EntangleKDACtion(dataset_60)
-            valid_60_entangle, result_entangle_60 = kd_entangle_value.executeaction(occurance_time=[dataset_60.index[-1]],
+            valid_60_entangle, result_entangle_60 = kd_entangle_value.executeaction(occurance_time=[dataset_60.index[-4]],
                                                                                     rsv_period=context.rsv_period,
                                                                                     k_period=context.k_period,
                                                                                     d_period=context.d_period,
@@ -2237,6 +2243,7 @@ if __name__ == '__main__':
     # DataContext.initklz(CountryCode.CHINA)
     # backtest(DataContext())
     # calconhistory(DataContext())
+    # quantstrategies(DataContext())
     '''
     login_em()
     DataContext.initklz(CountryCode.CHINA)
