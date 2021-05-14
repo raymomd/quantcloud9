@@ -879,7 +879,7 @@ class CROSSUpKDAction(ActionBase):
                 ret_valid = True
                 if self.__comparevalue(k_c_v, d_c_v, k_p_v, d_p_v, k_p2_v, d_p2_v):
                     if c_v[0]:
-                        if (not (k_c_v[0] > c_v[1] and k_p_v > c_v[1]) and not (d_c_v > c_v[1] and d_p_v > c_v[1])) \
+                        if (not (k_c_v > c_v[1] and k_p_v > c_v[1]) and not (d_c_v > c_v[1] and d_p_v > c_v[1])) \
                                 or (k_p2_v is not None and d_p2_v is not None and k_p_v < c_v[1] and d_p_v < c_v[1]):
                             row = self._data.loc[time_stamp]
                             ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
@@ -1801,7 +1801,7 @@ def quantstrategies(context: DataContext):
                 logger.error("strategy_cross_kd_60 is failed on {}".format(symbol_tmp))
 
             kd_entangle_value = EntangleKDACtion(dataset_60)
-            valid_60_entangle, result_entangle_60 = kd_entangle_value.executeaction(occurance_time=[dataset_60.index[-4]],
+            valid_60_entangle, result_entangle_60 = kd_entangle_value.executeaction(occurance_time=[dataset_60.index[-1]],
                                                                                     rsv_period=context.rsv_period,
                                                                                     k_period=context.k_period,
                                                                                     d_period=context.d_period,
