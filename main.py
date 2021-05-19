@@ -95,137 +95,321 @@ time_windows_15 = [0 for i in range(100)]  # set 100 so as to test after market
 time_windows_30 = [0 for i in range(100)]  # set 100 so as to test after market
 time_windows_60 = [0 for i in range(100)]  # set 100 so as to test after market
 
+
 class CountryCode(enum.Enum):
     CHINA = 'cn'
     US = 'us'
     NONE = 'none'
 
 
-class SectorCN(enum.Enum):
-    # 000001 优选股关注1
-    sector_000001 = '000001'
-    # 007180 券商概念
-    sector_007180 = '007180'
-    # 007224 大飞机
-    sector_007224 = '007224'
-    # 007315 半导体
-    sector_007315 = '007315'
-    # 007205 国产芯片
-    sector_007205 = '007205'
-    # 007039 生物疫苗
-    sector_007039 = '007039'
-    # 007001 军工
-    sector_007001 = '007001'
-    # 007139 医疗器械
-    sector_007139 = '007139'
-    # 007146 病毒防治
-    sector_007146 = '007146'
-    # 007147 独家药品
-    sector_007147 = '007147'
-    # 007162 基因测序
-    sector_007162 = '007162'
-    # 007167 免疫治疗
-    sector_007167 = '007167'
-    # 007188 健康中国
-    sector_007188 = '007188'
-    # 007195 人工智能
-    sector_007195 = '007195'
-    # 007200 区块链
-    sector_007200 = '007200'
-    # 007206 新能源车
-    sector_007206 = '007206'
-    # 007212 生物识别
-    sector_007212 = '007212'
-    # 007218 精准医疗
-    sector_007218 = '007218'
-    # 007220 军民融合
-    sector_007220 = '007220'
-    # 007243 互联医疗
-    sector_007243 = '007243'
-    # 007246 体外诊断
-    sector_007246 = '007246'
-    # 007284 数字货币
-    sector_007284 = '007284'
-    # 007332 长寿药
-    sector_007332 = '007332'
-    # 007336 疫苗冷链
-    sector_007336 = '007336'
-    # 007339 肝素概念
-    sector_007339 = '007339'
-    # 014010018003 生物医药
-    sector_014010018003 = '014010018003'
-    # 004012003001 太阳能
-    sector_004012003001 = '004012003001'
-    # 015011003003 光伏
-    sector_015011003003 = '015011003003'
-    # 007371 低碳冶金
-    sector_007371 = '007371'
-    # 018001001002001 新能源设备与服务
-    sector_018001001002001 = '018001001002001'
-    # 007068 太阳能
-    sector_007068 = '007068'
-    # 007005 节能环保
-    sector_007005 = '007005'
-    # 007152 燃料电池
-    sector_007152 = '007152'
-    # 007307 HIT电池
-    sector_007307 = '007307'
-    # 007370 光伏建筑一体化
-    sector_007370 = '007370'
-    # 007369 碳化硅
-    sector_007369 = '007369'
-    # 007359 碳交易
-    sector_0073259 = '007359'
+sectors_CN = {'000001': "优选股关注",
+              '007180': "券商概念",
+              '007224': "大飞机",
+              '007315': "半导体",
+              '007205': "国产芯片",
+              '007039': "生物疫苗",
+              '007001': "军工",
+              '007139': "医疗器械",
+              '007146': "病毒防治",
+              '007147': "独家药品",
+              '007162': "基因测序",
+              '007167': "免疫治疗",
+              '007188': "健康中国",
+              '007195': "人工智能",
+              '007200': "区块链",
+              '007206': "新能源车",
+              '007212': "生物识别",
+              '007218': "精准医疗",
+              '007220': "军民融合",
+              '007243': "互联医疗",
+              '007246': "体外诊断",
+              '007284': "数字货币",
+              '007332': "长寿药",
+              '007336': "疫苗冷链",
+              '007339': "肝素概念",
+              '014010018003': "生物医药",
+              '004012003001': "太阳能",
+              '015011003003': "光伏",
+              '007371': "低碳冶金",
+              '018001001002001': "新能源设备与服务",
+              '007068': "太阳能",
+              '007005': "节能环保",
+              '007152': "燃料电池",
+              '007307': "HIT电池",
+              '007370': "光伏建筑一体化",
+              '007369': "碳化硅",
+              '073259': "碳交易",
+              '007003': "煤化工",
+              '007004': "新能源",
+              '007007': "AB股",
+              '007008': "AH股",
+              '007009': "HS300_",
+              '007010': "次新股",
+              '007013': "中字头",
+              '007014': "创投",
+              '007017': "网络游戏",
+              '007019': "ST股",
+              '007020': "化工原料",
+              '007022': "参股券商",
+              '007024': "稀缺资源",
+              '007025': "社保重仓",
+              '007028': "新材料",
+              '007029': "参股期货",
+              '007030': "参股银行",
+              '007032': "转债标的",
+              '007033': "成渝特区",
+              '007034': "QFII重仓",
+              '007035': "基金重仓",
+              '007038': "黄金概念",
+              '007040': "深圳特区",
+              '007043': "机构重仓",
+              '007045': "物联网",
+              '007046': "移动支付",
+              '007048': "油价相关",
+              '007049': "滨海新区",
+              '007050':"股权激励",
+              '007051': "深成500",
+              '007053': "预亏预减",
+              '007054': "预盈预增",
+              '007057': "锂电池",
+              '007058': "核能核电",
+              '007059': "稀土永磁",
+              '007060': "云计算",
+              '007061': "LED",
+              '007062': "智能电网",
+              '007072': "铁路基建",
+              '007074': "长江三角",
+              '007075': "风能",
+              '007076': "融资融券",
+              '007077': "水利建设",
+              '007079': "新三板",
+              '007080': "海工装备",
+              '007082': "页岩气",
+              '007083': "参股保险",
+              '007085': "油气设服",
+              '007089': "央视50_",
+              '007090': "上证50_",
+              '007091': "上证180_",
+              '007093': "食品安全",
+              '007094': "中药",
+              '007096': "石墨烯",
+              '007098': "3D打印",
+              '007099': "地热能",
+              '007100': "海洋经济",
+              '007102': "通用航空",
+              '007104': "智慧城市",
+              '007105': "北斗导航",
+              '007108': "土地流转",
+              '007109': "送转预期",
+              '007110': "大数据",
+              '007111': "中超概念",
+              '007112': "B股",
+              '007113': "互联金融",
+              '007114': "创业成份",
+              '007116': "智能机器",
+              '007117': "智能穿戴",
+              '007118': "手游概念",
+              '007119': "上海自贸",
+              '007120': "特斯拉",
+              '007122': "养老概念",
+              '007124': "网络安全",
+              '007125': "智能电视",
+              '007131': "在线教育",
+              '007133': "二胎概念",
+              '007137': "电商概念",
+              '007136': "苹果概念",
+              '007138': "国家安防",
+              '007140': "生态农业",
+              '007142': "彩票概念",
+              '007143': "沪企改革",
+              '007145': "蓝宝石",
+              '007148': "粤港自贸",
+              '007149': "超导概念",
+              '007150': "智能家居",
+              '007153': "国企改革",
+              '007154': "京津冀",
+              '007155': "举牌",
+              '007159': "阿里概念",
+              '007160': "氟化工",
+              '007161': "在线旅游",
+              '007164': "小金属",
+              '007165': "国产软件",
+              '007166': "IPO受益",
+              '007168': "全息技术",
+              '007169': "充电桩",
+              '007170': "中证500",
+              '007172': "超级电容",
+              '007173': "无人机",
+              '007174': "上证380",
+              '007175': "人脑工程",
+              '007176': "沪股通",
+              '007177': "体育产业",
+              '007178': "赛马概念",
+              '007179': "量子通信",
+              '007181': "一带一路",
+              '007182': "2025规划",
+              '007183': "5G概念",
+              '007184': "航母概念",
+              '007186': "北京冬奥",
+              '007187': "证金持股",
+              '007190': "PPP模式",
+              '007191': "虚拟现实",
+              '007192': "高送转",
+              '007193': "海绵城市",
+              '007196': "增强现实",
+              '007197': "无人驾驶",
+              '007198': "工业4.0",
+              '007199': "壳资源",
+              '007201': "OLED",
+              '007202': "单抗概念",
+              '007203': "3D玻璃",
+              '007204': "猪肉概念",
+              '007207': "车联网",
+              '007209': "网红直播",
+              '007210': "草甘膦",
+              '007211': "无线充电",
+              '007213': "债转股",
+              '007214': "快递概念",
+              '007215': "股权转让",
+              '007216': "深股通",
+              '007217': "钛白粉",
+              '007219': "共享经济",
+              '007221': "超级品牌",
+              '007222': "贬值受益",
+              '007223': "雄安新区",
+              '007225': "昨日涨停",
+              '007226': "昨日连板",
+              '007227': "昨日触板",
+              '007228': "可燃冰",
+              '007230': "MSCI中国",
+              '007231': "创业板综",
+              '007232': "深证100R",
+              '007233': "租售同权",
+              '007234': "养老金",
+              '007236': "新零售",
+              '007237': "万达概念",
+              '007238': "工业互联",
+              '007239': "小米概念",
+              '007240': "乡村振兴",
+              '007241': "独角兽",
+              '007244': "东北振兴",
+              '007245': "知识产权",
+              '007247': "富士康",
+              '007248': "天然气",
+              '007249': "百度概念",
+              '007251': "影视概念",
+              '007253': "京东金融",
+              '007254': "进口博览",
+              '007255': "纾困概念",
+              '007256': "冷链物流",
+              '007257': "电子竞技",
+              '007258': "华为概念",
+              '007259': "纳米银",
+              '007260': "工业大麻",
+              '007263': "超清视频",
+              '007264': "边缘计算",
+              '007265': "数字孪生",
+              '007266': "超级真菌",
+              '007268': "氢能源",
+              '007269': "电子烟",
+              '007270': "人造肉",
+              '007271': "富时罗素",
+              '007272': "GDR",
+              '007275': "青蒿素",
+              '007276': "垃圾分类",
+              '007278': "ETC",
+              '007280': "PCB",
+              '007281': "分拆预期",
+              '007282': "标准普尔",
+              '007283': "UWB概念",
+              '007285': "光刻胶",
+              '007286': "VPN",
+              '007287': "智慧政务",
+              '007288': "鸡肉概念",
+              '007289': "农业种植",
+              '007290': "医疗美容",
+              '007291': "MLCC",
+              '007292': "乳业",
+              '007293': "无线耳机",
+              '007294': "阿兹海默",
+              '007295': "维生素",
+              '007296': "白酒",
+              '007297': "IPv6",
+              '007298': "胎压监测",
+              '007299': "CRO",
+              '007300': "3D摄像头",
+              '007301': "MiniLED",
+              '007302': "云游戏",
+              '007303': "广电",
+              '007304': "传感器",
+              '007305': "流感",
+              '007306': "转基因",
+              '007308': "降解塑料",
+              '007309': "口罩",
+              '007310': "远程办公",
+              '007311': "消毒剂",
+              '007312': "医废处理",
+              '007313': "WiFi",
+              '007314': "氮化镓",
+              '007316': "特高压",
+              '007317': "RCS概念",
+              '007318': "天基互联",
+              '007319': "数据中心",
+              '007320': "字节概念",
+              '007321': "地摊经济",
+              '007322': "三板精选",
+              '007323': "湖北自贸",
+              '007324': "免税概念",
+              '007325': "抖音小店",
+              '007326': "地塞米松",
+              '007328': "尾气治理",
+              '007329': "退税商店",
+              '007330': "蝗虫防治",
+              '007331': "中芯概念",
+              '007333': "蚂蚁概念",
+              '007334': "代糖概念",
+              '007335': "辅助生殖",
+              '007337': "商汤概念",
+              '007338': "汽车拆解",
+              '007340': "装配建筑",
+              '007341': "EDA概念",
+              '007342': "屏下摄像",
+              '007343': "MicroLED",
+              '007344': "氦气概念",
+              '007345': "刀片电池",
+              '007346': "第三代半导体",
+              '007347': "鸿蒙概念",
+              '007348': "盲盒经济",
+              '007349': "C2M概念",
+              '007350': "eSIM",
+              '007351': "拼多多概念",
+              '007352': "虚拟电厂",
+              '007353': "数字阅读",
+              '007354': "有机硅",
+              '007355': "RCEP概念",
+              '007356': "航天概念",
+              '007357': "6G概念",
+              '007358': "社区团购",
+              '007359': "碳交易",
+              '007360': "水产养殖",
+              '007361': "固态电池",
+              '007362': "汽车芯片",
+              '007363': "注册制次新股",
+              '007364': "快手概念",
+              '007365': "注射器概念",
+              '007366': "化妆品概念",
+              '007367': "磁悬浮概念",
+              '007368': "被动元件",
+              '007372': "工业气体",
+              '007373': "电子车牌",
+              '007374': "核污染防治",
+              '007375': "华为汽车",
+              '007376': "换电概念",
+              '007377': "CAR - T细胞疗法"}
 
 
-sectornames_CN = {SectorCN.sector_000001: "优选股关注",
-                  SectorCN.sector_007180: "券商概念",
-                  SectorCN.sector_007224: "大飞机",
-                  SectorCN.sector_007315: "半导体",
-                  SectorCN.sector_007205: "国产芯片",
-                  SectorCN.sector_007039: "生物疫苗",
-                  SectorCN.sector_007001: "军工",
-                  SectorCN.sector_007139: "医疗器械",
-                  SectorCN.sector_007146: "病毒防治",
-                  SectorCN.sector_007147: "独家药品",
-                  SectorCN.sector_007162: "基因测序",
-                  SectorCN.sector_007167: "免疫治疗",
-                  SectorCN.sector_007188: "健康中国",
-                  SectorCN.sector_007195: "人工智能",
-                  SectorCN.sector_007200: "区块链",
-                  SectorCN.sector_007206: "新能源车",
-                  SectorCN.sector_007212: "生物识别",
-                  SectorCN.sector_007218: "精准医疗",
-                  SectorCN.sector_007220: "军民融合",
-                  SectorCN.sector_007243: "互联医疗",
-                  SectorCN.sector_007246: "体外诊断",
-                  SectorCN.sector_007284: "数字货币",
-                  SectorCN.sector_007332: "长寿药",
-                  SectorCN.sector_007336: "疫苗冷链",
-                  SectorCN.sector_007339: "肝素概念",
-                  SectorCN.sector_014010018003: "生物医药",
-                  SectorCN.sector_004012003001: "太阳能",
-                  SectorCN.sector_015011003003: "光伏",
-                  SectorCN.sector_007371: "低碳冶金",
-                  SectorCN.sector_018001001002001: "新能源设备与服务",
-                  SectorCN.sector_007068: "太阳能",
-                  SectorCN.sector_007005: "节能环保",
-                  SectorCN.sector_007152: "燃料电池",
-                  SectorCN.sector_007307: "HIT电池",
-                  SectorCN.sector_007370: "光伏建筑一体化",
-                  SectorCN.sector_007369: "碳化硅",
-                  SectorCN.sector_0073259: "碳交易"}
-
-
-class SectorUS(enum.Enum):
-    # 000001 自定义关注1
-    sector_000001 = '000001'
-    # 201001 全部中概股
-    sector_201001 = '201001'
-
-
-sectornames_US = {SectorUS.sector_000001: "优选股关注",
-                  SectorUS.sector_201001: "中概股"}
+sectors_US = {'000001': "优选股关注",
+              '201001': "中概股"}
 
 
 # param: echo=True that is used to show each sql statement used in query
@@ -840,120 +1024,149 @@ class KDAction(ActionBase):
         return ret_v, self.__k_v, self.__d_v
 
 
-class CROSSUpKDAction(ActionBase):
+class StrategyBasedOnKDAction(ActionBase):
     def __init__(self, data: pd.DataFrame):
         super().__init__(data)
 
-    def __comparevalue(self, k_cur: float64, d_cur: float64,
-                       k_pre: float64, d_pre: float64,
-                       k_pre2: float64, d_pre2: float64):
-        condition = k_cur > k_pre and k_cur > d_cur and k_pre <= d_pre
-        if k_pre2 is not None and d_pre2 is not None:
-            condition |= k_cur > k_pre == d_pre and k_pre2 <= d_pre2
-        return condition
+    def crossupaction(self, time_stamp, k_v, d_v, c_v):
+        def comparevalue(k_cur: float64, d_cur: float64, k_pre: float64, d_pre: float64,
+                         k_pre2: float64, d_pre2: float64):
+            condition = k_cur > k_pre and k_cur > d_cur and k_pre <= d_pre
+            if k_pre2 is not None and d_pre2 is not None:
+                condition |= k_cur > k_pre == d_pre and k_pre2 <= d_pre2
+            return condition
 
-    def executeaction(self, **kwargs):
-        occurnaces = kwargs['occurance_time']
-        rsv_p = kwargs['rsv_period']
-        k_p = kwargs['k_period']
-        d_p = kwargs['d_period']
-        c_v = kwargs['crossvalue']
-        ret_valid = False
-        ret_value = pd.DataFrame(columns=columns)
-        kd_indicator = KDAction(self._data, rsv_p, k_p, d_p)
-        for time_stamp in occurnaces:
-            valid1, k_v, d_v = kd_indicator.executeaction()
-            if valid1:
-                index_c = self.getindex(time_stamp)
-                index_p, index_p2 = (index_c-1, index_c-2)
-                if k_v[index_c] is None or d_v[index_c] is None or index_p < 0 or k_v[index_p] is None or d_v[index_p] is None:
-                    continue
-                k_c_v = k_v[index_c]
-                d_c_v = d_v[index_c]
-                k_p_v = k_v[index_p]
-                d_p_v = d_v[index_p]
-                k_p2_v = d_p2_v = None
-                if index_p2 >= 0:
-                    k_p2_v = k_v[index_p2]
-                    d_p2_v = d_v[index_p2]
-                ret_valid = True
-                if self.__comparevalue(k_c_v, d_c_v, k_p_v, d_p_v, k_p2_v, d_p2_v):
-                    if c_v[0]:
-                        if (not (k_c_v > c_v[1] and k_p_v > c_v[1]) and not (d_c_v > c_v[1] and d_p_v > c_v[1])) \
-                                or (k_p2_v is not None and d_p2_v is not None and k_p_v < c_v[1] and d_p_v < c_v[1]):
-                            row = self._data.loc[time_stamp]
-                            ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
-                                                             row['high'], row['low'], row['volume'],
-                                                             time_stamp, True]
-                    else:
-                        row = self._data.loc[time_stamp]
-                        ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
-                                                         row['high'], row['low'], row['volume'],
-                                                         time_stamp, True]
-        return ret_valid, ret_value
-
-
-class EntangleKDACtion(ActionBase):
-    def __init__(self, data: pd.DataFrame):
-        super().__init__(data)
-
-    def __comparevalue(self, kd_results: list, periods: int):
-        ret = True
-        for i in range(periods):
-            k_v = kd_results[i][0]
-            d_v = kd_results[i][1]
-            if k_v != 0 and d_v != 0:
-                if k_v > d_v:
-                    ret &= abs((k_v - d_v) / k_v) <= 0.15
-                else:
-                    ret &= abs((d_v - k_v) / d_v) <= 0.15
+        index_c = self.getindex(time_stamp)
+        index_p, index_p2 = (index_c - 1, index_c - 2)
+        if k_v[index_c] is None or d_v[index_c] is None or index_p < 0 or k_v[index_p] is None or d_v[index_p] is None:
+            return False
+        k_c_v = k_v[index_c]
+        d_c_v = d_v[index_c]
+        k_p_v = k_v[index_p]
+        d_p_v = d_v[index_p]
+        k_p2_v = d_p2_v = None
+        if index_p2 >= 0:
+            k_p2_v = k_v[index_p2]
+            d_p2_v = d_v[index_p2]
+        if comparevalue(k_c_v, d_c_v, k_p_v, d_p_v, k_p2_v, d_p2_v):
+            if c_v[0]:
+                if (not (k_c_v > c_v[1] and k_p_v > c_v[1]) and not (d_c_v > c_v[1] and d_p_v > c_v[1])) \
+                        or (k_p2_v is not None and d_p2_v is not None and k_p_v < c_v[1] and d_p_v < c_v[1]):
+                    return True
             else:
-                if k_v == d_v:
-                    pass
-                elif k_v == 0:
-                    ret &= abs(d_v) < 2
-                else:
-                    ret &= abs(k_v) < 2
-        return ret
+                return True
 
-    def executeaction(self, **kwargs):
-        occurnaces = kwargs['occurance_time']
-        rsv_p = kwargs['rsv_period']
-        k_p = kwargs['k_period']
-        d_p = kwargs['d_period']
-        c_v = kwargs['crossvalue']
-        periods = kwargs['periods']
-        ret_valid = False
-        ret_value = pd.DataFrame(columns=columns)
-        kd_indicator = KDAction(self._data, rsv_p, k_p, d_p)
-        for time_stamp in occurnaces:
-            kd_results = []
-            valid1, k_v, d_v = kd_indicator.executeaction()
-            if valid1:
-                ret_valid = True
-                index_c = self.getindex(time_stamp)
-                for i in range(periods):
-                    index_t = index_c - i
-                    if index_t < 0:
-                        break;
-                    k_v_t = k_v[index_t]
-                    d_v_t = d_v[index_t]
-                    if k_v_t is not None and d_v_t is not None:
-                        if c_v[0]:
-                            if k_v_t <= c_v[1] and d_v_t <= c_v[1]:
-                                kd_results.append((k_v_t, d_v_t))
-                            else:
-                                break
-                        else:
-                            kd_results.append((k_v_t, d_v_t))
+        return False
+
+    def entangleaction(self, time_stamp, periods, k_v, d_v, c_v):
+        def comparevalue():
+            ret = True
+            for ii in range(periods):
+                k_v_ii = kd_results[ii][0]
+                d_v_ii = kd_results[ii][1]
+                ret &= self.__compare_entanglement(k_v_ii, d_v_ii, 15)
+                if not ret:
+                    break
+            return ret
+
+        kd_results = []
+        index_c = self.getindex(time_stamp)
+        for i in range(periods):
+            index_t = index_c - i
+            if index_t < 0:
+                break
+            k_v_i = k_v[index_t]
+            d_v_i = d_v[index_t]
+            if k_v_i is not None and d_v_i is not None:
+                if c_v[0]:
+                    if k_v_i <= c_v[1] and d_v_i <= c_v[1]:
+                        kd_results.append((k_v_i, d_v_i))
                     else:
                         break
                 else:
-                    if self.__comparevalue(kd_results, periods):
-                        row = self._data.loc[time_stamp]
-                        ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
-                                                         row['high'], row['low'], row['volume'],
-                                                         time_stamp, True]
+                    kd_results.append((k_v_i, d_v_i))
+            else:
+                break
+        else:
+            if comparevalue():
+                return True
+
+        return False
+
+    def crossup_entangle_action(self, time_stamp, periods, k_v, d_v, c_v):
+        if self.crossupaction(time_stamp, k_v, d_v, (False, 0)):
+            index_c = self.getindex(time_stamp)
+            k_v_c = k_v[index_c]
+            d_v_c = d_v[index_c]
+            if self.__compare_entanglement(k_v_c, d_v_c, 15):
+                return self.entangleaction(time_stamp, periods, k_v, d_v, c_v)
+            else:
+                index_p = index_c - 1
+                if index_p < 0:
+                    return False
+                time_stamp_p = self._data.index[index_p]
+                return self.entangleaction(time_stamp_p, periods, k_v, d_v, c_v)
+
+        return False
+
+    def __compare_entanglement(self, k_v_t, d_v_t, percent):
+        ret = True
+        if k_v_t != 0 and d_v_t != 0:
+            if k_v_t > d_v_t:
+                ret = abs((k_v_t - d_v_t) / k_v_t) <= percent/100
+            else:
+                ret = abs((d_v_t - k_v_t) / d_v_t) <= percent/100
+        else:
+            if k_v_t == d_v_t:
+                pass
+            elif k_v_t == 0:
+                ret = abs(d_v_t) < 2
+            else:
+                ret = abs(k_v_t) < 2
+        return ret
+
+    def executeaction(self, **kwargs):
+        def locdata():
+            row = self._data.loc[time_stamp]
+            ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
+                                             row['high'], row['low'], row['volume'],
+                                             time_stamp, True]
+
+        occurrences = kwargs['occurrence_time']
+        operation = kwargs['operation']
+        c_v = kwargs['crossvalue']
+        periods = kwargs.get('periods', 1)
+        rsv_p = kwargs.get('rsv_period')
+        k_p = kwargs.get('k_period')
+        d_p = kwargs.get('d_period')
+        k_v_o = kwargs.get('KValues')
+        d_v_o = kwargs.get('DValues')
+        ret_valid = True
+        ret_value = pd.DataFrame(columns=columns)
+        valid = False
+        if k_v_o is not None and d_v_o is not None:
+            valid = True
+            k_v = k_v_o
+            d_v = d_v_o
+        else:
+            kd_indicator = KDAction(self._data, rsv_p, k_p, d_p)
+            valid, k_v, d_v = kd_indicator.executeaction()
+        if valid:
+            for time_stamp in occurrences:
+
+                if operation == 'cross_up':
+                    if self.crossupaction(time_stamp, k_v, d_v, c_v):
+                        locdata()
+                elif operation == 'entangle':
+                    if self.entangleaction(time_stamp, periods, k_v, d_v, c_v):
+                        locdata()
+                elif operation == 'entangle_and_cross_up':
+                    if self.crossup_entangle_action(time_stamp, periods, k_v, d_v, c_v):
+                        locdata()
+                else:
+                    logger.error("%s is not supported!" % operation)
+        else:
+            ret_valid = False
 
         return ret_valid, ret_value
 
@@ -1006,13 +1219,13 @@ class OBVUpACTION(ActionBase):
         return ret_valid, total_value
 
     def executeaction(self, **kwargs):
-        occurnaces = kwargs['occurance_time']
+        occurrences = kwargs['occurrence_time']
         obv_p = kwargs['obv_period']
         obv_a_p = kwargs['obv_a_period']
         ret_valid = False
         ret_value = pd.DataFrame(columns=columns)
         obv_indicator = OBVAction(self._data, obv_p)
-        oa = occurnaces.array
+        oa = occurrences.array
         for time_stamp_original in oa:
             cur_index = self.getindex(time_stamp_original)
             valid1, obv_v = obv_indicator.executeaction(index=cur_index)
@@ -1084,6 +1297,7 @@ class DataContext:
     strategy1 = 'strategy1'
     strategy2 = 'strategy2'
     strategy3 = 'strategy3'
+    strategy4 = 'strategy4'
     strategy1_2 = 'strategy1and2'
 
     code_spotlighted = [7171, 2901, 300571, 2634, 300771, 603871, 603165, 603755, 2950, 688178,
@@ -1267,7 +1481,8 @@ class DataContext:
                                      stock_group["AMEX"]: self.symbols_exchange_l_amex}
 
         self.sendemailtime: datetime.datetime = None
-        self.totalresult = {DataContext.strategy1: {}, DataContext.strategy2: {}, DataContext.strategy3: {}}
+        self.totalresult = {DataContext.strategy1: {}, DataContext.strategy2: {}, DataContext.strategy3: {},
+                            DataContext.strategy4: {}}
         self.sectors = {}
 
         logger.debug("Initialization of context is done.")
@@ -1394,16 +1609,16 @@ class DataContext:
 def loadsectors(context: DataContext):
     date_t = datetime.datetime.today().replace(hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d")
     if DataContext.iscountryChina():
-        sectors = SectorCN
+        sectors = sectors_CN.keys()
     elif DataContext.iscountryUS():
-        sectors = SectorUS
+        sectors = sectors_US.keys()
     for sector_i in sectors:
-        if sector_i == sectors.sector_000001:
+        if sector_i == '000001':
             append_value(context.sectors, sector_i, [str(code).zfill(6) for code in DataContext.code_spotlighted])
         else:
-            data = c.sector(sector_i.value, date_t)
+            data = c.sector(sector_i, date_t)
             if data.ErrorCode != 0:
-                logger.debug("request sector %s Error, %s" % (sector_i.value, data.ErrorMsg))
+                logger.debug("request sector %s Error, %s" % (sector_i, data.ErrorMsg))
             else:
                 for code in data.Data:
                     code_l = code.split(".")
@@ -1681,7 +1896,7 @@ def snapshot(context: DataContext):
                     updatestockdata(stock_data)
                 logger.debug("update stock data in context")
                 # 3) calculate indicators
-                logger.debug("run 3 strategies")
+                logger.debug("run 4 strategies")
                 try:
                     result = {current_time: quantstrategies(context)}
                 except Exception as ee:
@@ -1756,17 +1971,19 @@ def quantstrategies(context: DataContext):
                                                                                     hour=time_stamp_original.hour + 1)))
                         time_sequence.append(time_stamp)
 
-                    kd_cross = CROSSUpKDAction(context.data30mins[sector_tmp].get(symbol_tmp))
-                    valid, result_tmp = kd_cross.executeaction(occurance_time=time_sequence,
+                    kd_cross = StrategyBasedOnKDAction(context.data30mins[sector_tmp].get(symbol_tmp))
+                    valid, result_tmp = kd_cross.executeaction(occurrence_time=time_sequence,
+                                                               operation='cross_up',
                                                                rsv_period=context.rsv_period,
                                                                k_period=context.k_period,
-                                                               d_period=context.d_period, crossvalue=(False, 0))
+                                                               d_period=context.d_period,
+                                                               crossvalue=(False, 0))
                     if valid:
                         # FIXME
                         '''
                         if len(result_tmp) > 0:
                             obv_up = OBVUpACTION(context.data30mins[sector_tmp].get(symbol_tmp))
-                            valid, result_tmp = obv_up.executeaction(occurance_time=result_tmp['time'],
+                            valid, result_tmp = obv_up.executeaction(occurrence_time=result_tmp['time'],
                                                                      obv_period=context.obv_period,
                                                                      obv_a_period=context.obv_a_period)
                             if valid:
@@ -1785,14 +2002,21 @@ def quantstrategies(context: DataContext):
                 logger.error("strategy_cross_70 is failed on {}".format(symbol_tmp))
 
             dataset_60 = context.data60mins[sector_tmp].get(symbol_tmp)
+
             if len(dataset_60) == 0:
                 continue
 
-            kd_cross_value = CROSSUpKDAction(dataset_60)
-            valid_60, result_tmp_60 = kd_cross_value.executeaction(occurance_time=[dataset_60.index[-1]],
-                                                                   rsv_period=context.rsv_period,
-                                                                   k_period=context.k_period,
-                                                                   d_period=context.d_period, crossvalue=(True, 30))
+            kd_indicator = KDAction(dataset_60, context.rsv_period, context.k_period, context.d_period)
+            valid_kd_60, k_v_60, d_v_60 = kd_indicator.executeaction()
+            if not valid_kd_60:
+                continue
+
+            kd_cross_value = StrategyBasedOnKDAction(dataset_60)
+            valid_60, result_tmp_60 = kd_cross_value.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                                                   operation='cross_up',
+                                                                   crossvalue=(True, 30),
+                                                                   KValues=k_v_60,
+                                                                   DValues=d_v_60)
             if valid_60:
                 if len(result_tmp_60) > 0:
                     results[DataContext.strategy2] = result_tmp_60
@@ -1800,18 +2024,33 @@ def quantstrategies(context: DataContext):
             else:
                 logger.error("strategy_cross_kd_60 is failed on {}".format(symbol_tmp))
 
-            kd_entangle_value = EntangleKDACtion(dataset_60)
-            valid_60_entangle, result_entangle_60 = kd_entangle_value.executeaction(occurance_time=[dataset_60.index[-1]],
-                                                                                    rsv_period=context.rsv_period,
-                                                                                    k_period=context.k_period,
-                                                                                    d_period=context.d_period,
-                                                                                    crossvalue=(True, 30), periods=4)
+            kd_entangle_value = StrategyBasedOnKDAction(dataset_60)
+            valid_60_entangle, result_entangle_60 = kd_entangle_value.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                                                                    operation='entangle',
+                                                                                    crossvalue=(True, 30),
+                                                                                    periods=4,
+                                                                                    KValues=k_v_60,
+                                                                                    DValues=d_v_60)
             if valid_60_entangle:
                 if len(result_entangle_60) > 0:
                     results[DataContext.strategy3] = result_entangle_60
                     resultdata[symbol_tmp] = results
             else:
                 logger.error("strategy_entangle_kd_60 is failed on {}".format(symbol_tmp))
+
+            kd_entangle_crossup_value = StrategyBasedOnKDAction(dataset_60)
+            valid_60_entangle_crossup, result_entangle_crossup_60 = kd_entangle_crossup_value.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                                                                                            operation='entangle_and_cross_up',
+                                                                                                            crossvalue=(True, 30),
+                                                                                                            periods=4,
+                                                                                                            KValues=k_v_60,
+                                                                                                            DValues=d_v_60)
+            if valid_60_entangle_crossup:
+                if len(result_entangle_crossup_60) > 0:
+                    results[DataContext.strategy4] = result_entangle_crossup_60
+                    resultdata[symbol_tmp] = results
+            else:
+                logger.error("strategy_entangle_crossup_kd_60 is failed on {}".format(symbol_tmp))
 
         totalresultdata[sector_tmp] = resultdata
     return totalresultdata
@@ -1861,7 +2100,13 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
         else:
             append_value(context.totalresult[strategy], symbol_s, CalcResult(time_result, row[7]))
 
-    symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: []}
+    def calcresult(strategy_n: str):
+        result_c = set(symbols[strategy_n])
+        result_h = set(context.totalresult[strategy_n].keys()) - result_c
+        logger.info("%d symbols found with %s at %s" % (len(result_c), strategy_n, keytime))
+        return result_c, result_h
+
+    symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: [], DataContext.strategy4: []}
     for time_result, result in result_transient.items():
         keytime = time_result
         for index, value in result.items():
@@ -1878,20 +2123,19 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
                     elif index_2 == DataContext.strategy3:
                         for row in value_2.itertuples(index=False):
                             assembleFunc(index_1, DataContext.strategy3)
+                    elif index_2 == DataContext.strategy4:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy4)
 
-    result_c_s1 = set(symbols[DataContext.strategy1])
-    result_h_s1 = set(context.totalresult[DataContext.strategy1].keys()) - result_c_s1
-    logger.info("%d symbols found with strategy 1 at %s" % (len(result_c_s1), keytime))
-    result_c_s2 = set(symbols[DataContext.strategy2])
-    result_h_s2 = set(context.totalresult[DataContext.strategy2].keys()) - result_c_s2
-    logger.info("%d symbols found with strategy 2 at %s" % (len(result_c_s2), keytime))
-    result_c_s3 = set(symbols[DataContext.strategy3])
-    result_h_s3 = set(context.totalresult[DataContext.strategy3].keys()) - result_c_s3
-    logger.info("%d symbols found with strategy 3 at %s" % (len(result_c_s3), keytime))
+    result_c_s1, result_h_s1 = calcresult(DataContext.strategy1)
+    result_c_s2, result_h_s2 = calcresult(DataContext.strategy2)
+    result_c_s3, result_h_s3 = calcresult(DataContext.strategy3)
+    result_c_s4, result_h_s4 = calcresult(DataContext.strategy4)
     result_c_s1_2 = result_c_s1.intersection(result_c_s2).union(result_c_s1.intersection(result_h_s2))
     result_h_s1_2 = result_h_s1.intersection(result_h_s2).union(result_h_s1.intersection(result_c_s2))
     logger.info("%d symbols found with strategy 1 and 2 at %s" % (len(result_c_s1_2), keytime))
-    ret = {keytime: {DataContext.strategy3: [result_c_s3, result_h_s3],
+    ret = {keytime: {DataContext.strategy4: [result_c_s4, result_h_s4],
+                     DataContext.strategy3: [result_c_s3, result_h_s3],
                      DataContext.strategy1_2: [result_c_s1_2, result_h_s1_2],
                      DataContext.strategy1: [result_c_s1, result_h_s1],
                      DataContext.strategy2: [result_c_s2, result_h_s2]}}
@@ -1909,12 +2153,12 @@ def handleresultlocked(resultf, context: DataContext):
         email_p: str = ""
         none_sector = "无归属版块"
         if DataContext.iscountryChina():
-            sectornames = sectornames_CN
-            spotlightedsector = sectornames[SectorCN.sector_000001]
+            sectornames = sectors_CN
+            spotlightedsector = sectornames['000001']
             print_order = [spotlightedsector]
         else:
-            sectornames = sectornames_US
-            spotlightedsector = sectornames[SectorUS.sector_000001]
+            sectornames = sectors_US
+            spotlightedsector = sectornames['000001']
             print_order = [spotlightedsector]
         for symbol_c in result_t:
             for index_s, value_s in context.sectors.items():
@@ -1941,10 +2185,10 @@ def handleresultlocked(resultf, context: DataContext):
                         list_tmp = []
                         for i in range(max_num):
                             list_tmp.append(value_s_o.pop())
-                        str3 = ",".join(list_tmp)
+                        str3 = " ".join(list_tmp)
                         str_p = " ".join(list_tmp)
                     else:
-                        str3 = ",".join(value_s_o)
+                        str3 = " ".join(value_s_o)
                         str_p = " ".join(value_s_o)
                         value_s_o.clear()
                     str3 += "\r\n"
@@ -1989,7 +2233,11 @@ def handleresultlocked(resultf, context: DataContext):
         with open(filepath, 'w+') as file:
             for strategy_t, symbols_l in result.items():
                 str101 = ""
-                if strategy_t == DataContext.strategy3:
+                if strategy_t == DataContext.strategy4:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略4 - 预警条件为:\r\n"
+                    str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n"
+                    str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
+                elif strategy_t == DataContext.strategy3:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略3 - 预警条件为:\r\n"
                     str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n\r\n"
                 elif strategy_t == DataContext.strategy1:
@@ -2048,6 +2296,7 @@ def updatedatabaselocked(board: str):
 
 
 def updatedatabase():
+
     timedelta = datetime.timedelta(minutes=10)
     today = datetime.datetime.today()
     time_download = datetime.datetime.combine(datetime.date(year=today.year, month=today.month, day=today.day),
@@ -2112,8 +2361,8 @@ def login_em(isforcelogin: bool=True):
         loginResult = c.start(loginparam, '', mainCallback)
         logger.debug(loginResult)
         if loginResult.ErrorCode != 0:
-            logger.error("Choice quant -- login failed.")
-            exit()
+            logger.error("Choice quant -- login failed. ErrorCode is %d" % loginResult.ErrorCode)
+            login_em()
     except Exception as ee:
         logger.error("error >>>", ee)
         logger.error("Choice quant -- login failed.")
