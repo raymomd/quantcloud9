@@ -1607,23 +1607,46 @@ class DataContext:
 
 
 def loadsectors(context: DataContext):
+    if not DataContext.iscountryChina():
+        return
+    filename = "sectors_allocation"
+    filepath = os.path.join(r'./', filename)
+    append_value(context.sectors, '000001', [str(code).zfill(6) for code in DataContext.code_spotlighted])
+    with open(filepath, 'r') as file:
+        for line in file.read().splitlines():
+            sector_symbols = line.split(":")
+            if len(sector_symbols) > 1:
+                symbols = sector_symbols[1].split(",")
+                if len(symbols) > 1:
+                    for symbol in symbols:
+                        append_value(context.sectors, sector_symbols[0], symbol)
+
+
+def loadsectorsfromEM():
     date_t = datetime.datetime.today().replace(hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d")
     if DataContext.iscountryChina():
         sectors = sectors_CN.keys()
     elif DataContext.iscountryUS():
         sectors = sectors_US.keys()
-    for sector_i in sectors:
-        if sector_i == '000001':
-            append_value(context.sectors, sector_i, [str(code).zfill(6) for code in DataContext.code_spotlighted])
-        else:
-            data = c.sector(sector_i, date_t)
-            if data.ErrorCode != 0:
-                logger.debug("request sector %s Error, %s" % (sector_i, data.ErrorMsg))
+    filename = "sectors_allocation"
+    filepath = os.path.join(r'./', filename)
+    with open(filepath, 'w+') as file:
+        for sector_i in sectors:
+            if sector_i == '000001':
+                pass
             else:
-                for code in data.Data:
-                    code_l = code.split(".")
-                    if len(code_l) > 1:
-                        append_value(context.sectors, sector_i, code_l[0])
+                data = c.sector(sector_i, date_t)
+                if data.ErrorCode != 0:
+                    logger.debug("request sector %s Error, %s" % (sector_i, data.ErrorMsg))
+                else:
+                    file.write('{}:'.format(sector_i))
+                    symbolsinsector = []
+                    for code in data.Data:
+                        code_l = code.split(".")
+                        if len(code_l) > 1:
+                            symbolsinsector.append(code_l[0])
+                    file.writelines(",".join(symbolsinsector))
+                    file.write('\r\n')
 
 
 def snapshot(context: DataContext):
@@ -2296,7 +2319,6 @@ def updatedatabaselocked(board: str):
 
 
 def updatedatabase():
-
     timedelta = datetime.timedelta(minutes=10)
     today = datetime.datetime.today()
     time_download = datetime.datetime.combine(datetime.date(year=today.year, month=today.month, day=today.day),
@@ -2494,9 +2516,10 @@ if __name__ == '__main__':
     # calconhistory(DataContext())
     # quantstrategies(DataContext())
     '''
-    login_em()
+    login_em(isforcelogin=False)
     DataContext.initklz(CountryCode.CHINA)
     updatedatabase()
+    #loadsectorsfromEM()
     logout_em()
     '''
     # DataContext.country = CountryCode.US
