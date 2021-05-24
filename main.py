@@ -3,7 +3,7 @@ import akshare as ak
 import yfinance as yf
 import psycopg2
 from sqlalchemy import create_engine
-from numpy import (float64, nan, datetime64)
+from numpy import (float64, nan)
 from abc import (abstractmethod)
 import pathlib
 import os
@@ -26,7 +26,7 @@ pd.set_option('display.unicode.east_asian_width', True)
 # 显示所有列
 pd.set_option('display.max_columns', None)
 # 显示所有行
-# pd.set_option('display.max_rows', None)
+pd.set_option('display.max_rows', None)
 
 
 log.basicConfig(level=log.DEBUG,
@@ -138,7 +138,6 @@ sectors_CN = {'000001': "优选股关注",
               '007307': "HIT电池",
               '007370': "光伏建筑一体化",
               '007369': "碳化硅",
-              '073259': "碳交易",
               '007003': "煤化工",
               '007004': "新能源",
               '007007': "AB股",
@@ -401,11 +400,13 @@ sectors_CN = {'000001': "优选股关注",
               '007367': "磁悬浮概念",
               '007368': "被动元件",
               '007372': "工业气体",
+              # There is unavailable value of gain/loss and money flow for the below sectors
               '007373': "电子车牌",
               '007374': "核污染防治",
               '007375': "华为汽车",
               '007376': "换电概念",
-              '007377': "CAR - T细胞疗法"}
+              '007377': "CAR - T细胞疗法",
+              '073259': "碳交易"}
 
 
 sectors_US = {'000001': "优选股关注",
@@ -1299,6 +1300,9 @@ class DataContext:
     strategy3 = 'strategy3'
     strategy4 = 'strategy4'
     strategy1_2 = 'strategy1and2'
+    strategy1_4 = 'strategy1and4'
+
+    email_recipient = 'wsx_dna@sina.com'
 
     code_spotlighted = [7171, 2901, 300571, 2634, 300771, 603871, 603165, 603755, 2950, 688178,
                         603506, 603757, 537, 600167, 300765, 603327, 603360, 300738, 688026, 300800,
@@ -1650,11 +1654,12 @@ def loadsectorsfromEM():
 
 
 def snapshot(context: DataContext):
-    # 1) start retrieving data once market is open
-    # 2) retrieve snapshot of stocks depending on country every other 3 seconds according to limitation
-    # 3) update stock data in context
-    # 4) calculate indicators based on newly frenched stock data
-    # 5) send result to another thread to handle
+    # 1) rank sectors over previous consecutive 10 business days
+    # 2) start retrieving data once market is open
+    # 3) retrieve snapshot of stocks depending on country every other 3 seconds according to limitation
+    # 4) update stock data in context
+    # 5) calculate indicators based on newly fetched stock data
+    # 6) send result to another thread to handle
     fetchdatacounter = 0
     barcounter_15 = 0
     roundresult_15 = 0
@@ -1855,6 +1860,8 @@ def snapshot(context: DataContext):
                         updateexistingrow(isfirstK_60, barcounter_60, tmpdata_60)
                     break
 
+    calcrankofchange()
+
     while True:
         current_time = datetime.datetime.now()
         if DataContext.iscountryChina():
@@ -1950,6 +1957,7 @@ def snapshot(context: DataContext):
                 time.sleep(30)
                 logger.debug("sleep of 30 is done due to error occurring during requesting csqsnapshot")
         elif (current_time - closetime) >= target_time:
+            summarytotalresult(context)
             logger.debug("market is closed so that snapshot quits")
             context.queue.put(ProcessStatus.STOP)
             print("time windows for 15 mins:")
@@ -2079,6 +2087,128 @@ def quantstrategies(context: DataContext):
     return totalresultdata
 
 
+def calcrankofchange():
+    if DataContext.iscountryChina():
+        prefix = "B_"
+        current_date = datetime.datetime.now().strftime("%Y-%m-%d")
+        # 偏移N天交易日
+        date_offset = c.getdate(current_date, -11, "Market=CNSESH")
+        if date_offset.ErrorCode != 0:
+            logger.error("ErrorCode is %d and ErrorMsg is %s" % (date_offset.ErrorCode, date_offset.ErrorMsg))
+            return False
+        # 区间涨跌幅(流通市值加权平均):CPPCTCHANGEFMWAVG 区间资金净流入:PNETINFLOWSUM
+        sectors_q = list(sectors_CN.keys())
+        i = 1
+        sectors_length = len(sectors_q) - 6
+        sectors_v = []
+        while i < sectors_length:
+            j = i + 6
+            if j > sectors_length:
+                j = sectors_length
+            sectors_g = ",".join(map(lambda x: prefix + x, sectors_q[i:j]))
+            sector_data = c.cses(sectors_g, "CPPCTCHANGEFMWAVG,PNETINFLOWSUM",
+                                 "StartDate={},EndDate={}, IsHistory=0, Ispandas=1, ShowBlank=0".format(
+                                     date_offset.Data[0], current_date))
+            sectors_v.append(sector_data)
+            i += 6
+        logger.debug("%d sectors has been scanned" % (sectors_length - 1))
+        sectors_df = pd.concat(sectors_v)
+        sectors_df_change_d = sectors_df.sort_values(by='CPPCTCHANGEFMWAVG', ascending=False)
+        sectors_df_mf_d = sectors_df.sort_values(by='PNETINFLOWSUM', ascending=False)
+        sectors_list_change_d = sectors_df_change_d.index.tolist()
+        sectors_list_mf_d = sectors_df_mf_d.index.tolist()
+        if len(sectors_df) > 50:
+            list_sectors_change = sectors_list_change_d[:50]
+            list_sectors_change_r = sectors_list_change_d[:-51:-1]
+            list_sectors_mf = sectors_list_mf_d[:50]
+            list_sectors_mf_r = sectors_list_change_d[:-51:-1]
+        else:
+            list_sectors_change = sectors_list_change_d
+            list_sectors_change_r = sectors_list_change_d[::-1]
+            list_sectors_mf = sectors_list_mf_d
+            list_sectors_mf_r = sectors_list_change_d[::-1]
+
+        e_subject = "版块排名_" + datetime.datetime.now().strftime("%Y%m%d")
+        e_content = ""
+        filepath = os.path.join(DataContext.dir_name, e_subject)
+        with open(filepath, 'w+') as file:
+            tmp_str = "涨幅版块排名\r\n"
+            file.write(tmp_str)
+            e_content += tmp_str
+            for index in list_sectors_change:
+                column = sectors_df_change_d['CPPCTCHANGEFMWAVG']
+                sector_name = sectors_CN[index.lstrip(prefix)]
+                tmp_str = "版块名称: {} -- 幅度: {}% \r\n".format(sector_name, column[index])
+                file.write(tmp_str)
+                e_content += tmp_str
+            tmp_str = "\r\n跌幅版块排名\r\n"
+            file.write(tmp_str)
+            e_content += tmp_str
+            for index in list_sectors_change_r:
+                column = sectors_df_change_d['CPPCTCHANGEFMWAVG']
+                sector_name = sectors_CN[index.lstrip(prefix)]
+                tmp_str = "版块名称: {} -- 幅度: {}% \r\n".format(sector_name, column[index])
+                file.write(tmp_str)
+                e_content += tmp_str
+            tmp_str = "\r\n资金净流入版块排名 - 从高到低\r\n"
+            file.write(tmp_str)
+            e_content += tmp_str
+            for index in list_sectors_mf:
+                column = sectors_df_mf_d['PNETINFLOWSUM']
+                sector_name = sectors_CN[index.lstrip(prefix)]
+                tmp_str = "版块名称: {} -- 资金: {} \r\n".format(sector_name, column[index])
+                file.write(tmp_str)
+                e_content += tmp_str
+            tmp_str = "\r\n资金净流入版块排名 - 从低到高\r\n"
+            file.write(tmp_str)
+            e_content += tmp_str
+            for index in list_sectors_mf_r:
+                column = sectors_df_mf_d['PNETINFLOWSUM']
+                sector_name = sectors_CN[index.lstrip(prefix)]
+                tmp_str = "版块名称: {} -- 资金: {} \r\n".format(sector_name, column[index])
+                file.write(tmp_str)
+                e_content += tmp_str
+
+        sendemail(e_subject, e_content, DataContext.email_recipient)
+
+
+def summarytotalresult(context: DataContext):
+    e_subject = "预警汇总_" + datetime.datetime.now().strftime("%Y%m%d")
+    e_content = ""
+    filepath = os.path.join(DataContext.dir_name, e_subject)
+    with open(filepath, 'w+') as file:
+        for strategy_t, symbols in context.totalresult.items():
+            str101 = ""
+            if strategy_t == DataContext.strategy4:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略4 - 预警条件为:\r\n"
+                str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n"
+                str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
+            elif strategy_t == DataContext.strategy3:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略3 - 预警条件为:\r\n"
+                str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n\r\n"
+            elif strategy_t == DataContext.strategy1:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略1 - 预警条件为:\r\n"
+                str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
+                str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
+                str101 += "  3. KD指标在30分钟周期形成金叉\r\n\r\n"
+                # FIXME
+                # str101 += "  4. OBV指标在30分钟周期大于零且大于30天均值\r\n\r\n"
+            elif strategy_t == DataContext.strategy2:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略2 - 预警条件为:\r\n"
+                str101 += "  1. 收盘价在60分钟周期不大于50\r\n"
+                str101 += "  2. KD指标在60分钟周期形成金叉且金叉小于30\r\n\r\n"
+            elif strategy_t == DataContext.strategy1_2:
+                str101 = "\r\n\r\n\r\n\r\n\r\n同时满足策略1和策略2的预警条件:\r\n\r\n"
+            elif strategy_t == DataContext.strategy1_4:
+                str101 = "\r\n\r\n\r\n\r\n\r\n同时满足策略1和策略4的预警条件:\r\n\r\n"
+            file.write(str101)
+            e_content += str101
+            for symbol in symbols:
+                file.write(symbol)
+                e_content += symbol
+    sendemail(e_subject, e_content, DataContext.email_recipient)
+
+
 # the function runs in a separate thread
 @time_measure
 def handleresult(context: DataContext):
@@ -2100,10 +2230,10 @@ def handleresult(context: DataContext):
                                      context.marketclosetime) - time_cur <= datetime.timedelta(minutes=DataContext.sendemial_interval) \
                  or context.sendemailtime is None \
                  or time_cur - context.sendemailtime >= datetime.timedelta(minutes=DataContext.sendemial_interval):
-            sendemail(subject_e1, content_e1, 'wsx_dna@sina.com')
+            sendemail(subject_e1, content_e1, DataContext.email_recipient)
             # sendemail(subject_e1, content_e1, 'stocash2021@163.com')
             # if DataContext.iscountryChina():
-            #    sendemail(subject_e2, content_e2, 'wsx_dna@sina.com')
+            #    sendemail(subject_e2, content_e2, DataContext.email_recipient)
             context.sendemailtime = time_cur
 
 
@@ -2157,7 +2287,11 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     result_c_s1_2 = result_c_s1.intersection(result_c_s2).union(result_c_s1.intersection(result_h_s2))
     result_h_s1_2 = result_h_s1.intersection(result_h_s2).union(result_h_s1.intersection(result_c_s2))
     logger.info("%d symbols found with strategy 1 and 2 at %s" % (len(result_c_s1_2), keytime))
+    result_c_s1_4 = result_c_s1.intersection(result_c_s4).union(result_c_s1.intersection(result_h_s4))
+    result_h_s1_4 = result_h_s1.intersection(result_h_s4).union(result_h_s1.intersection(result_c_s4))
+    logger.info("%d symbols found with strategy 1 and 4 at %s" % (len(result_c_s1_4), keytime))
     ret = {keytime: {DataContext.strategy4: [result_c_s4, result_h_s4],
+                     DataContext.strategy1_4: [result_c_s1_4, result_h_s1_4],
                      DataContext.strategy3: [result_c_s3, result_h_s3],
                      DataContext.strategy1_2: [result_c_s1_2, result_h_s1_2],
                      DataContext.strategy1: [result_c_s1, result_h_s1],
@@ -2276,6 +2410,8 @@ def handleresultlocked(resultf, context: DataContext):
                     str101 += "  2. KD指标在60分钟周期形成金叉且金叉小于30\r\n\r\n"
                 elif strategy_t == DataContext.strategy1_2:
                     str101 = "\r\n\r\n\r\n\r\n\r\n同时满足策略1和策略2的预警条件:\r\n\r\n"
+                elif strategy_t == DataContext.strategy1_4:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n同时满足策略1和策略4的预警条件:\r\n\r\n"
                 content_tmp, content_em_tmp = output(str101)
                 emailcontent += content_tmp
                 emailcontent_em += content_em_tmp
@@ -2285,13 +2421,13 @@ def handleresultlocked(resultf, context: DataContext):
 
 def sendemail(email_subject: str, email_content: str, recipient: str):
     msg = EmailMessage()
-    msg["From"] = 'wsx_dna@sina.com'
+    msg["From"] = DataContext.email_recipient
     msg["To"] = recipient
     msg["Subject"] = email_subject
     msg.set_content(email_content)
     try:
         with smtplib.SMTP_SSL("smtp.sina.com", 465) as smtp:
-            smtp.login("wsx_dna@sina.com", "f7556624333b77f3")
+            smtp.login(DataContext.email_recipient, "f7556624333b77f3")
             smtp.send_message(msg)
     except Exception as ee:
         logger.error("error >>>", ee)
