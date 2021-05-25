@@ -1485,8 +1485,8 @@ class DataContext:
                                      stock_group["AMEX"]: self.symbols_exchange_l_amex}
 
         self.sendemailtime: datetime.datetime = None
-        self.totalresult = {DataContext.strategy1: {}, DataContext.strategy2: {}, DataContext.strategy3: {},
-                            DataContext.strategy4: {}}
+        self.totalresult = {DataContext.strategy1_4: {}, DataContext.strategy1_2: {}, DataContext.strategy4: {},
+                            DataContext.strategy1: {}, DataContext.strategy2: {}, DataContext.strategy3: {}}
         self.sectors = {}
 
         logger.debug("Initialization of context is done.")
@@ -2121,12 +2121,12 @@ def calcrankofchange():
             list_sectors_change = sectors_list_change_d[:50]
             list_sectors_change_r = sectors_list_change_d[:-51:-1]
             list_sectors_mf = sectors_list_mf_d[:50]
-            list_sectors_mf_r = sectors_list_change_d[:-51:-1]
+            list_sectors_mf_r = sectors_list_mf_d[:-51:-1]
         else:
             list_sectors_change = sectors_list_change_d
             list_sectors_change_r = sectors_list_change_d[::-1]
             list_sectors_mf = sectors_list_mf_d
-            list_sectors_mf_r = sectors_list_change_d[::-1]
+            list_sectors_mf_r = sectors_list_mf_d[::-1]
 
         e_subject = "版块排名_" + datetime.datetime.now().strftime("%Y%m%d")
         e_content = ""
@@ -2203,9 +2203,9 @@ def summarytotalresult(context: DataContext):
                 str101 = "\r\n\r\n\r\n\r\n\r\n同时满足策略1和策略4的预警条件:\r\n\r\n"
             file.write(str101)
             e_content += str101
-            for symbol in symbols:
-                file.write(symbol)
-                e_content += symbol
+            symbols_str = " ".join(symbols.keys())
+            file.write(symbols_str)
+            e_content += symbols_str
     sendemail(e_subject, e_content, DataContext.email_recipient)
 
 
@@ -2251,14 +2251,14 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
         if ishistory:
             append_value(context.totalresult[strategy], symbol_s, CalcResult(row[6], row[7]))
         else:
-            append_value(context.totalresult[strategy], symbol_s, CalcResult(time_result, row[7]))
+            append_value(context.totalresult[strategy], symbol_s, CalcResult(keytime, row[7]))
 
     def calcresult(strategy_n: str):
         result_c = set(symbols[strategy_n])
         result_h = set(context.totalresult[strategy_n].keys()) - result_c
         logger.info("%d symbols found with %s at %s" % (len(result_c), strategy_n, keytime))
         return result_c, result_h
-
+    keytime = datetime.datetime.now()
     symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: [], DataContext.strategy4: []}
     for time_result, result in result_transient.items():
         keytime = time_result
@@ -2286,9 +2286,13 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     result_c_s4, result_h_s4 = calcresult(DataContext.strategy4)
     result_c_s1_2 = result_c_s1.intersection(result_c_s2).union(result_c_s1.intersection(result_h_s2))
     result_h_s1_2 = result_h_s1.intersection(result_h_s2).union(result_h_s1.intersection(result_c_s2))
+    for result_1_2 in result_c_s1_2:
+        append_value(context.totalresult[DataContext.strategy1_2], result_1_2, CalcResult(keytime, True))
     logger.info("%d symbols found with strategy 1 and 2 at %s" % (len(result_c_s1_2), keytime))
     result_c_s1_4 = result_c_s1.intersection(result_c_s4).union(result_c_s1.intersection(result_h_s4))
     result_h_s1_4 = result_h_s1.intersection(result_h_s4).union(result_h_s1.intersection(result_c_s4))
+    for result_1_4 in result_c_s1_4:
+        append_value(context.totalresult[DataContext.strategy1_4], result_1_4, CalcResult(keytime, True))
     logger.info("%d symbols found with strategy 1 and 4 at %s" % (len(result_c_s1_4), keytime))
     ret = {keytime: {DataContext.strategy4: [result_c_s4, result_h_s4],
                      DataContext.strategy1_4: [result_c_s1_4, result_h_s1_4],
