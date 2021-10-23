@@ -17,6 +17,7 @@ import sys
 import threading
 from queue import Queue
 from email.message import EmailMessage
+from email.mime.text import MIMEText
 import smtplib
 
 
@@ -452,6 +453,8 @@ def createtable(symbols: list, exchange: str, period: int):
             create_table = "create_table_c_30"
         elif period == 60:
             create_table = "create_table_c_60"
+        elif period == 240:
+            create_table = "create_table_c_240"
     elif DataContext.iscountryUS():
         if period == 15:
             create_table = "create_table_u"
@@ -474,7 +477,7 @@ def droptable(symbols: list, exchange: str):
     conn.commit()
 
 
-def inserttab(exchange: str, symbol: str, stock_df: pd.DataFrame, datasource: DataSource, period=15, transientdf: pd.DataFrame=None):
+def inserttab(exchange: str, symbol: str, stock_df: pd.DataFrame, datasource: DataSource, period=15, transientdf: pd.DataFrame=None, type_func=1):
     conn = getdbconn()
     csr = getdbconn().cursor()
     if DataContext.iscountryChina():
@@ -486,12 +489,15 @@ def inserttab(exchange: str, symbol: str, stock_df: pd.DataFrame, datasource: Da
             header_l = 'low'
             header_v = 'volume'
         elif datasource == DataSource.EAST_MONEY:
-            stock_day = stock_df.index.tolist()
             header_o = 'OPEN'
             header_c = 'CLOSE'
             header_h = 'HIGH'
             header_l = 'LOW'
             header_v = 'VOLUME'
+            if type_func == 1:
+                stock_day = stock_df.index.tolist()
+            elif type_func == 2:
+                header_d = 'DATES'
         statement_start = "insert into china_"
     elif DataContext.iscountryUS():
         if datasource == DataSource.YAHOO:
@@ -576,7 +582,6 @@ def inserttab(exchange: str, symbol: str, stock_df: pd.DataFrame, datasource: Da
         stock_high = transientdf['high']
         stock_low = transientdf['low']
         stock_volume = transientdf['volume']
-        statement_start = "insert into china_"
         i: int = 0
         loop_len = len(stock_day) - 1
         while i < loop_len:
@@ -600,36 +605,75 @@ def inserttab(exchange: str, symbol: str, stock_df: pd.DataFrame, datasource: Da
             count += 1
         conn.commit()
         logger.debug("%s - rows are %d for period 60 mins" % (symbol, count))
+    elif period == 240 and DataContext.iscountryChina():
+        if type_func == 2:
+            count: int = 0
+            for code, row in stock_df.iterrows():
+                if row[header_o] is not None and \
+                   row[header_c] is not None and \
+                   row[header_h] is not None and \
+                   row[header_l] is not None and \
+                   row[header_v] is not None and \
+                   len(code.split('.')) > 1:
+                    csr.execute(statement_start + exchange + "_tbl_240 (gid,crt_time,open,close,high,low,volume) " +
+                                "values (%s,%s,%s,%s,%s,%s,%s) on conflict on constraint time_key_" + exchange + "_240 do nothing;",
+                                (str(code.split('.')[0]), str(row[header_d]), str(row[header_o]), str(row[header_c]),
+                                 str(row[header_h]), str(row[header_l]), str(row[header_v])))
+                    count += 1
+            conn.commit()
+            logger.debug("%s - rows are %d for period 240 mins" % (exchange, count))
+
+    # logger.debug("%s - rows are %d for period 60 mins" % (symbol, count))
 
 
-def insertdata(exchange: str, group: str, symbols: list, retried, datasource: DataSource, period: str = '15',
-               adjust: str = "qfq"):
+def insertdata(exchange: str, group: str, symbols: list, retried, datasource: DataSource, period: str = '15', type_func=1, adjust: str = "qfq"):
     exchange_group = ",".join([exchange, group])
     if DataContext.iscountryChina():
-        for symbol_i in symbols:
-            if datasource == DataSource.AK_SHARE:
-                symbol_internal = group + str(symbol_i)
-                stock_zh_df_tmp = ak.stock_zh_a_minute(symbol=symbol_internal, period=period, adjust=adjust)
-            elif datasource == DataSource.EAST_MONEY:
-                symbol_internal = ".".join([str(symbol_i), group])
-                stock_zh_df_tmp = c.cmc(symbol_internal, "OPEN,HIGH,LOW,CLOSE,VOLUME,TIME",
-                                        (datetime.datetime.today() - datetime.timedelta(days=1)).strftime("%Y-%m-%d"),
-                                        datetime.datetime.today().strftime("%Y-%m-%d"),
-                                        "AdjustFlag=1,RowIndex=2,Period=15,IsHistory=1,Ispandas=1")
-                if isinstance(stock_zh_df_tmp, c.EmQuantData) and stock_zh_df_tmp.ErrorCode != 0:
-                    logger.error("it is failed to get stock data for {} {} and error code is {} error message is {}".
-                                 format(symbol_i, exchange_group, stock_zh_df_tmp.ErrorCode, stock_zh_df_tmp.ErrorMsg))
-                    if stock_zh_df_tmp.ErrorMsg.find('service error') != -1 or \
-                            stock_zh_df_tmp.ErrorCode == 10002011 or \
-                            stock_zh_df_tmp.ErrorCode == 10002010 or \
-                            stock_zh_df_tmp.ErrorCode == 10002004:
-                        append_value(retried, exchange_group, symbol_i)
-
-            if isinstance(stock_zh_df_tmp, pd.DataFrame):
-                inserttab(exchange, symbol_i, stock_zh_df_tmp, datasource)
-                tmp_df = pd.DataFrame(columns=columns)
-                inserttab(exchange, symbol_i, stock_zh_df_tmp, datasource, period=30, transientdf=tmp_df)
-                inserttab(exchange, symbol_i, stock_zh_df_tmp, datasource, period=60, transientdf=tmp_df)
+        if type_func == 1:
+            for symbol_i in symbols:
+                if datasource == DataSource.AK_SHARE:
+                    symbol_internal = group + str(symbol_i)
+                    # stock_zh_df_tmp = ak.stock_zh_a_minute(symbol=symbol_internal, period=period, adjust=adjust)
+                    stock_zh_df_tmp = ak.stock_zh_a_minute(symbol=symbol_internal, period=period, datalengh="16")
+                elif datasource == DataSource.EAST_MONEY:
+                    symbol_internal = ".".join([str(symbol_i), group])
+                    stock_zh_df_tmp = c.cmc(symbol_internal, "OPEN,HIGH,LOW,CLOSE,VOLUME,TIME",
+                                            (datetime.datetime.today() - datetime.timedelta(days=3)).strftime(
+                                                "%Y-%m-%d"),
+                                            datetime.datetime.today().strftime("%Y-%m-%d"),
+                                            "AdjustFlag=1,RowIndex=2,Period=15,IsHistory=1,Ispandas=1")
+                    if isinstance(stock_zh_df_tmp, c.EmQuantData) and stock_zh_df_tmp.ErrorCode != 0:
+                        logger.error(
+                            "it is failed to get stock data for {} {} and error code is {} error message is {}".
+                            format(symbol_i, exchange_group, stock_zh_df_tmp.ErrorCode, stock_zh_df_tmp.ErrorMsg))
+                        if stock_zh_df_tmp.ErrorMsg.find('service error') != -1 or \
+                                stock_zh_df_tmp.ErrorCode == 10002011 or \
+                                stock_zh_df_tmp.ErrorCode == 10002010 or \
+                                stock_zh_df_tmp.ErrorCode == 10002004:
+                            append_value(retried, exchange_group, symbol_i)
+                if isinstance(stock_zh_df_tmp, pd.DataFrame):
+                    inserttab(exchange, symbol_i, stock_zh_df_tmp, datasource)
+                    tmp_df = pd.DataFrame(columns=columns)
+                    inserttab(exchange, symbol_i, stock_zh_df_tmp, datasource, period=30, transientdf=tmp_df)
+                    inserttab(exchange, symbol_i, stock_zh_df_tmp, datasource, period=60, transientdf=tmp_df)
+        elif type_func == 2:
+            symbol_internals = []
+            for symbol_i in symbols:
+                symbol_internals.append(".".join([str(symbol_i), group]))
+            if group == "SZ":
+                market = "CNSESZ"
+            else:
+                market = "CNSESH"
+            stock_zh_df_tmp = c.csd(symbol_internals, "OPEN,HIGH,LOW,CLOSE,VOLUME,TIME",
+                                    (datetime.datetime.today() - datetime.timedelta(days=3)).strftime("%Y-%m-%d"),
+                                    datetime.datetime.today().strftime("%Y-%m-%d"),
+                                    "AdjustFlag=1,RowIndex=1,Period=1,Ispandas=1,Market=%s" % market)
+            if isinstance(stock_zh_df_tmp, c.EmQuantData) and stock_zh_df_tmp.ErrorCode != 0:
+                logger.error(
+                    "it is failed to get stock data for {} and error code is {} error message is {}".
+                    format(exchange_group, stock_zh_df_tmp.ErrorCode, stock_zh_df_tmp.ErrorMsg))
+            elif isinstance(stock_zh_df_tmp, pd.DataFrame):
+                inserttab(exchange, "", stock_zh_df_tmp, datasource, period=240, type_func=type_func)
     elif DataContext.iscountryUS():
         for symbol_i in symbols:
             stock_us_df_tmp = yf.download(tickers=symbol_i, auto_adjust=True, period="10d", interval="15m")
@@ -639,20 +683,20 @@ def insertdata(exchange: str, group: str, symbols: list, retried, datasource: Da
 
 
 def insertdata_continue(exchange: str, group: str, symbols: list, c_point: str, retried, datasource: DataSource,
-                        period: str = '15', adjust: str = "qfq"):
+                        period: str = '15', type_func=1, adjust: str = "qfq"):
     pos = (pd.Series(symbols) == c_point).argmax() + 1
-    insertdata(exchange, group, symbols[pos:], retried, datasource)
+    insertdata(exchange, group, symbols[pos:], retried, datasource, period, type_func)
 
 
-def loaddatalocked(indicator: str, exchange: str, symbols: list, operation: int, datasource: DataSource,
+def loaddatalocked(indicator: str, exchange: str, symbols: list, operation: int, type_func: int, datasource: DataSource,
                    c_point: str, retried={}, period=15):
     group = stock_group[indicator]
     if operation == 1:
         createtable(symbols, group, period)
     elif operation == 2:
-        insertdata(group, exchange, symbols, retried, datasource)
+        insertdata(group, exchange, symbols, retried, datasource, "%d" % period, type_func)
     elif operation == 3:
-        insertdata_continue(group, exchange, symbols, c_point, retried, datasource)
+        insertdata_continue(group, exchange, symbols, c_point, retried, datasource, "%d" % period, type_func)
     elif operation == 4:
         droptable(symbols, group)
 
@@ -707,28 +751,30 @@ def selectgroup(indicator: str):
     return group, returndata
 
 
-def loaddata(indicators, operation: int, c_point='', datasource: DataSource = DataSource.AK_SHARE, period=15):
+def loaddata(indicators, operation: int, c_point='', datasource: DataSource = DataSource.AK_SHARE, period=15, type_func=1, isloginAlready=False):
     retriedStocks = {}
-    if datasource == DataSource.EAST_MONEY:
+    if datasource == DataSource.EAST_MONEY and not isloginAlready:
         login_em()
     try:
-        loaddatainternal(indicators, operation, c_point, retriedStocks, datasource, period)
-        if datasource == DataSource.EAST_MONEY:
+        loaddatainternal(indicators, operation, type_func, c_point, retriedStocks, datasource, period)
+        if datasource == DataSource.EAST_MONEY and type_func == 1:
             reloaddata(retriedStocks)
     finally:
-        if datasource == DataSource.EAST_MONEY:
-            logout_em()
-        if getdbconn():
-            getdbconn().cursor().close()
-            getdbconn().close()
-        logger.debug("PostgreSQL connection is closed")
+        if not isloginAlready:
+            if datasource == DataSource.EAST_MONEY:
+                logout_em()
+            if getdbconn():
+                getdbconn().cursor().close()
+                getdbconn().close()
+            logger.debug("PostgreSQL connection is closed")
 
 
-def loaddatainternal(indicators, operation: int, c_point='', retried={}, datasource: DataSource = DataSource.AK_SHARE, period=15):
+
+def loaddatainternal(indicators, operation: int, type_func=1, c_point='', retried={}, datasource: DataSource = DataSource.AK_SHARE, period=15):
     try:
         for indicator in indicators:
             group, symbols = selectgroup(indicator)
-            loaddatalocked(indicator, group, symbols, operation, datasource, c_point, retried, period)
+            loaddatalocked(indicator, group, symbols, operation, type_func, datasource, c_point, retried, period)
     except psycopg2.Error as error:
         logger.error("Error while connecting to PostgreSQL", error)
     except Exception as ee:
@@ -1038,6 +1084,8 @@ class StrategyBasedOnKDAction(ActionBase):
             return condition
 
         index_c = self.getindex(time_stamp)
+        if index_c is None:
+            return False
         index_p, index_p2 = (index_c - 1, index_c - 2)
         if k_v[index_c] is None or d_v[index_c] is None or index_p < 0 or k_v[index_p] is None or d_v[index_p] is None:
             return False
@@ -1061,6 +1109,8 @@ class StrategyBasedOnKDAction(ActionBase):
 
     def entangleaction(self, time_stamp, periods, k_v, d_v, c_v):
         def comparevalue():
+            if len(kd_results) < periods:
+                return False
             ret = True
             for ii in range(periods):
                 k_v_ii = kd_results[ii][0]
@@ -1072,6 +1122,8 @@ class StrategyBasedOnKDAction(ActionBase):
 
         kd_results = []
         index_c = self.getindex(time_stamp)
+        if index_c is None:
+            return False
         for i in range(periods):
             index_t = index_c - i
             if index_t < 0:
@@ -1088,27 +1140,51 @@ class StrategyBasedOnKDAction(ActionBase):
                     kd_results.append((k_v_i, d_v_i))
             else:
                 break
-        else:
-            if comparevalue():
-                return True
 
-        return False
+        return comparevalue()
 
     def crossup_entangle_action(self, time_stamp, periods, k_v, d_v, c_v):
         if self.crossupaction(time_stamp, k_v, d_v, (False, 0)):
             index_c = self.getindex(time_stamp)
+            if index_c is None:
+                return False
             k_v_c = k_v[index_c]
             d_v_c = d_v[index_c]
             if self.__compare_entanglement(k_v_c, d_v_c, 15):
                 return self.entangleaction(time_stamp, periods, k_v, d_v, c_v)
             else:
                 index_p = index_c - 1
-                if index_p < 0:
+                if index_p < periods - 1:
                     return False
                 time_stamp_p = self._data.index[index_p]
                 return self.entangleaction(time_stamp_p, periods, k_v, d_v, c_v)
 
         return False
+
+    def crossup_entangle_period_action(self, time_stamp, periods, duration, k_v, d_v):
+        if self.crossupaction(time_stamp, k_v, d_v, (False, 0)):
+            if self.crossup_entangle_action(time_stamp, periods, k_v, d_v, (False, 0)):
+                return True
+            index_c = self.getindex(time_stamp)
+            if index_c is None:
+                return False
+            index_s = index_c - 2
+            if index_s < periods:
+                return False
+            count = 1
+            index_i = index_s - 1
+            while index_i > -1:
+                if count > duration - 2:
+                    break
+                time_stamp_i = self._data.index[index_i]
+                #TODO: try crossup_entangle_action out
+                if self.crossupaction(time_stamp_i, k_v, d_v, (False, 0)):
+                    break
+                if self.entangleaction(time_stamp_i, periods, k_v, d_v, (False, 0)):
+                    return True
+                index_i -= 1
+                count += 1
+            return False
 
     def __compare_entanglement(self, k_v_t, d_v_t, percent):
         ret = True
@@ -1137,6 +1213,7 @@ class StrategyBasedOnKDAction(ActionBase):
         operation = kwargs['operation']
         c_v = kwargs['crossvalue']
         periods = kwargs.get('periods', 1)
+        duration = kwargs.get('duration', 40)
         rsv_p = kwargs.get('rsv_period')
         k_p = kwargs.get('k_period')
         d_p = kwargs.get('d_period')
@@ -1144,7 +1221,6 @@ class StrategyBasedOnKDAction(ActionBase):
         d_v_o = kwargs.get('DValues')
         ret_valid = True
         ret_value = pd.DataFrame(columns=columns)
-        valid = False
         if k_v_o is not None and d_v_o is not None:
             valid = True
             k_v = k_v_o
@@ -1163,6 +1239,9 @@ class StrategyBasedOnKDAction(ActionBase):
                         locdata()
                 elif operation == 'entangle_and_cross_up':
                     if self.crossup_entangle_action(time_stamp, periods, k_v, d_v, c_v):
+                        locdata()
+                elif operation == 'entangle_and_cross_up_within_period':
+                    if self.crossup_entangle_period_action(time_stamp, periods, duration, k_v, d_v):
                         locdata()
                 else:
                     logger.error("%s is not supported!" % operation)
@@ -1229,6 +1308,8 @@ class OBVUpACTION(ActionBase):
         oa = occurrences.array
         for time_stamp_original in oa:
             cur_index = self.getindex(time_stamp_original)
+            if cur_index is None:
+                continue
             valid1, obv_v = obv_indicator.executeaction(index=cur_index)
             if valid1:
                 valid2, obv_a_v = self.__calcv_a_obv(cur_index, obv_a_p, obv_p)
@@ -1240,6 +1321,44 @@ class OBVUpACTION(ActionBase):
                                                          row['high'], row['low'], row['volume'],
                                                          time_stamp_original, True]
 
+        return ret_valid, ret_value
+
+
+class StrategyBasedOnDayKAction(ActionBase):
+    def __init__(self, data: pd.DataFrame):
+        super().__init__(data)
+
+    def __calcamplitudeavg(self, period: int, percent: float):
+        ret_valid_t = False
+        ret_value_t = False
+        requiredlength = period + 2
+        if len(self._data) < requiredlength:
+            return ret_valid_t, ret_value_t
+        ret_valid_t = True
+        total: float = 0
+        for i in range(1, requiredlength-1):
+            index: int = -1 - i
+            total += (self.high_ticker(index)-self.low_ticker(index))/self.close_ticker(index-1)
+        if total/period >= percent/100:
+            ret_value_t = True
+        return ret_valid_t, ret_value_t
+
+    def executeaction(self, **kwargs):
+        operation = kwargs['operation']
+        amplitude_period = kwargs['amplitude_peroid']
+        amplitude_percent = kwargs['amplitude_percent']
+        ret_valid = False
+        ret_value = pd.DataFrame(columns=columns)
+        if operation == 'amplitude_avg':
+            ret_valid, ret_value_bool = self.__calcamplitudeavg(amplitude_period, amplitude_percent)
+            if ret_value_bool:
+                time_stamp = self._data.index[-1]
+                row = self._data.loc[time_stamp]
+                ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
+                                                 row['high'], row['low'], row['volume'],
+                                                 time_stamp, True]
+        else:
+            logger.error("%s is not supported!" % operation)
         return ret_valid, ret_value
 
 
@@ -1287,6 +1406,7 @@ class DataContext:
     limitfordatafetched = 0
     limitfordatafetched_30 = 0
     limitfordatafetched_60 = 0
+    limitfordatafetched_240 = 0
     markets = []
     marketopentime: datetime.time = None
     marketclosetime: datetime.time = None
@@ -1299,8 +1419,11 @@ class DataContext:
     strategy2 = 'strategy2'
     strategy3 = 'strategy3'
     strategy4 = 'strategy4'
+    strategy5 = 'strategy5'
+    strategy6 = 'strategy6'
     strategy1_2 = 'strategy1and2'
     strategy1_4 = 'strategy1and4'
+    strategy100 = 'strategy100'
 
     email_recipient = 'wsx_dna@sina.com'
 
@@ -1327,6 +1450,7 @@ class DataContext:
             DataContext.limitfordatafetched = 160
             DataContext.limitfordatafetched_30 = 120
             DataContext.limitfordatafetched_60 = 80
+            DataContext.limitfordatafetched_240 = 30
             DataContext.markets = ["科创板", "创业板", "中小企业板", "主板A股", "主板"]
             DataContext.marketopentime = datetime.time(hour=9, minute=30)
             DataContext.marketclosetime = datetime.time(hour=15)
@@ -1336,7 +1460,6 @@ class DataContext:
         elif DataContext.iscountryUS():
             DataContext.limitfordatafetched = 260
             DataContext.limitfordatafetched_30 = 195
-            DataContext.limitfordatafetched_60 = 21
             DataContext.markets = ["NASDAQ", "NYSE", "AMEX"]
             DataContext.marketopentime = datetime.time(hour=9, minute=30)
             DataContext.marketclosetime = datetime.time(hour=16)
@@ -1392,6 +1515,13 @@ class DataContext:
             self.China_sh_a_60 = StockData('sh_a')
             self.China_sz_a_60 = StockData('sz_a')
 
+            # 240mins
+            self.China_small_240 = StockData('small')
+            self.China_startup_240 = StockData('startup')
+            self.China_tech_startup_240 = StockData('tech_startup')
+            self.China_sh_a_240 = StockData('sh_a')
+            self.China_sz_a_240 = StockData('sz_a')
+
             # symbol lists
             self.symbols_l_tech_startup = []
             self.symbols_l_startup = []
@@ -1429,6 +1559,12 @@ class DataContext:
                                stock_group["创业板"]: self.China_startup_60,
                                stock_group["主板A股"]: self.China_sh_a_60,
                                stock_group["主板"]: self.China_sz_a_60}
+
+            self.data240mins = {stock_group["科创板"]: self.China_tech_startup_240,
+                               stock_group["中小企业板"]: self.China_small_240,
+                               stock_group["创业板"]: self.China_startup_240,
+                               stock_group["主板A股"]: self.China_sh_a_240,
+                               stock_group["主板"]: self.China_sz_a_240}
 
             self.symbols = {stock_group["科创板"]: self.symbols_l_tech_startup,
                             stock_group["中小企业板"]: self.symbols_l_small,
@@ -1485,35 +1621,42 @@ class DataContext:
                                      stock_group["AMEX"]: self.symbols_exchange_l_amex}
 
         self.sendemailtime: datetime.datetime = None
-        self.totalresult = {DataContext.strategy1_4: {}, DataContext.strategy1_2: {}, DataContext.strategy4: {},
-                            DataContext.strategy1: {}, DataContext.strategy2: {}, DataContext.strategy3: {}}
+        self.totalresult = {DataContext.strategy1_4: {}, DataContext.strategy1_2: {},
+                            DataContext.strategy5: {}, DataContext.strategy100: {},
+                            DataContext.strategy4: {}, DataContext.strategy1: {},
+                            DataContext.strategy2: {}, DataContext.strategy3: {}}
+                            # DataContext.strategy6: {}
         self.sectors = {}
 
         logger.debug("Initialization of context is done.")
 
     def preparedata(self, indicator: str):
+        tablename_prefixes = ["", "", "", ""]
+
+
+        def gentablenameprefix(prefixes: list):
+            if DataContext.iscountryChina():
+                countrycode = 'china_'
+            else:
+                countrycode = 'us_'
+            if indicator == "科创板":
+                prefixes[0] = 'china_tbl_'
+            else:
+                prefixes[0] = countrycode + stock_group[indicator] + '_tbl_'
+            prefixes[1] = countrycode + stock_group[indicator] + '_tbl_30_'
+            prefixes[2] = countrycode + stock_group[indicator] + '_tbl_60_'
+            prefixes[3] = countrycode + stock_group[indicator] + '_tbl_240_'
+
         if indicator in {"中小企业板", "创业板", "主板"}:
             header = "公司代码"
             exchange = 'SZ'
-            tablename_prefix = 'china_' + stock_group[indicator] + '_tbl_'
-            tablename_prefix_30 = 'china_' + stock_group[indicator] + '_tbl_30_'
-            tablename_prefix_60 = 'china_' + stock_group[indicator] + '_tbl_60_'
         elif indicator in {"科创板", "主板A股"}:
             header = 'SECURITY_CODE_A'
             exchange = 'SH'
-            if indicator == "科创板":
-                tablename_prefix = 'china_tbl_'
-                tablename_prefix_30 = 'china_' + stock_group[indicator] + '_tbl_30_'
-                tablename_prefix_60 = 'china_' + stock_group[indicator] + '_tbl_60_'
-            elif indicator == "主板A股":
-                tablename_prefix = 'china_' + stock_group[indicator] + '_tbl_'
-                tablename_prefix_30 = 'china_' + stock_group[indicator] + '_tbl_30_'
-                tablename_prefix_60 = 'china_' + stock_group[indicator] + '_tbl_60_'
         elif indicator in {"NASDAQ", "NYSE", "AMEX"}:
             header = 'SECURITY_CODE_A'
-            tablename_prefix = 'us_' + stock_group[indicator] + '_tbl_'
-            tablename_prefix_30 = 'us_' + stock_group[indicator] + '_tbl_30_'
-            tablename_prefix_60 = 'china_' + stock_group[indicator] + '_tbl_60_'
+
+        gentablenameprefix(tablename_prefixes)
 
         tmp_symbol_l = []
         tmp_symbol_exchange_l = []
@@ -1523,6 +1666,8 @@ class DataContext:
         tmp_data_30.sector = stock_group[indicator]
         tmp_data_60 = StockData()
         tmp_data_60.sector = stock_group[indicator]
+        tmp_data_240 = StockData()
+        tmp_data_240.sector = stock_group[indicator]
 
         def getdatafromdatabase(tablename: str, limits: int):
             sql_statement = "select * from \"{}\" order by crt_time desc limit {};".format(tablename, limits)
@@ -1549,15 +1694,15 @@ class DataContext:
                     else:
                         logger.error('%s is invalid', symbol)
                         continue
-                table_name = tablename_prefix + symbol
+                table_name = tablename_prefixes[0] + symbol
                 tmp_data.update(symbol, getdatafromdatabase(table_name, DataContext.limitfordatafetched))
-                table_name_30 = tablename_prefix_30 + symbol
+                table_name_30 = tablename_prefixes[1] + symbol
                 tmp_data_30.update(symbol, getdatafromdatabase(table_name_30, DataContext.limitfordatafetched_30))
                 if DataContext.iscountryChina():
-                    table_name_60 = tablename_prefix_60 + symbol
+                    table_name_60 = tablename_prefixes[2] + symbol
                     tmp_data_60.update(symbol, getdatafromdatabase(table_name_60, DataContext.limitfordatafetched_60))
-
-                # make up data based on interval of 30 mins
+                    table_name_240 = tablename_prefixes[3] + symbol
+                    tmp_data_240.update(symbol, getdatafromdatabase(table_name_240, DataContext.limitfordatafetched_240))
         else:
             logger.error('%s does not exist', (symbol_paths[stock_group[indicator]]))
             exit()
@@ -1568,30 +1713,35 @@ class DataContext:
                 self.China_small_15 = tmp_data
                 self.China_small_30 = tmp_data_30
                 self.China_small_60 = tmp_data_60
+                self.China_small_240 = tmp_data_240
             elif indicator == "创业板":
                 self.symbols_l_startup = tmp_symbol_l
                 self.symbols_exchange_l_startup = tmp_symbol_exchange_l
                 self.China_startup_15 = tmp_data
                 self.China_startup_30 = tmp_data_30
                 self.China_startup_60 = tmp_data_60
+                self.China_startup_240 = tmp_data_240
             elif indicator == "科创板":
                 self.symbols_l_tech_startup = tmp_symbol_l
                 self.symbols_exchange_l_tech_startup = tmp_symbol_exchange_l
                 self.China_tech_startup_15 = tmp_data
                 self.China_tech_startup_30 = tmp_data_30
                 self.China_tech_startup_60 = tmp_data_60
+                self.China_tech_startup_240 = tmp_data_240
             elif indicator == "主板A股":
                 self.symbols_l_sh_a = tmp_symbol_l
                 self.symbols_exchange_l_sh_a = tmp_symbol_exchange_l
                 self.China_sh_a_15 = tmp_data
                 self.China_sh_a_30 = tmp_data_30
                 self.China_sh_a_60 = tmp_data_60
+                self.China_sh_a_240 = tmp_data_240
             elif indicator == "主板":
                 self.symbols_l_sz_a = tmp_symbol_l
                 self.symbols_exchange_l_sz_a = tmp_symbol_exchange_l
                 self.China_sz_a_15 = tmp_data
                 self.China_sz_a_30 = tmp_data_30
                 self.China_sz_a_60 = tmp_data_60
+                self.China_sz_a_240 = tmp_data_240
         elif DataContext.iscountryUS():
             if indicator == "NASDAQ":
                 self.symbols_l_nasdaq = tmp_symbol_exchange_l
@@ -1671,27 +1821,15 @@ def snapshot(context: DataContext):
     roundresult_60 = 0
     firstroundresult_60 = 0
     current_time = datetime.datetime.now()
+    current_date = datetime.date.today()
     if DataContext.iscountryChina():
-        opentime = datetime.datetime.combine(datetime.date(year=current_time.year, month=current_time.month,
-                                                           day=current_time.day),
-                                             context.marketopentime)
-        closetime = datetime.datetime.combine(datetime.date(year=current_time.year, month=current_time.month,
-                                                            day=current_time.day),
-                                              context.marketclosetime)
-
-        breakstarttime = datetime.datetime.combine(datetime.date(year=current_time.year, month=current_time.month,
-                                                                 day=current_time.day),
-                                                   context.marketbreakstarttime)
-        breakstoptime = datetime.datetime.combine(datetime.date(year=current_time.year, month=current_time.month,
-                                                                day=current_time.day),
-                                                  context.marketbreakstoptime)
+        opentime = datetime.datetime.combine(current_date, context.marketopentime)
+        closetime = datetime.datetime.combine(current_date, context.marketclosetime)
+        breakstarttime = datetime.datetime.combine(current_date, context.marketbreakstarttime)
+        breakstoptime = datetime.datetime.combine(current_date, context.marketbreakstoptime)
     elif DataContext.iscountryUS():
-        opentime = datetime.datetime.combine(datetime.date(year=current_time.year, month=current_time.month,
-                                                           day=current_time.day),
-                                             context.marketopentime)
-        closetime = datetime.datetime.combine(datetime.date(year=current_time.year, month=current_time.month,
-                                                            day=current_time.day),
-                                              context.marketclosetime)
+        opentime = datetime.datetime.combine(current_date, context.marketopentime)
+        closetime = datetime.datetime.combine(current_date, context.marketclosetime)
 
     target_time = datetime.timedelta(days=0, hours=0, minutes=0, seconds=0)
 
@@ -1705,46 +1843,31 @@ def snapshot(context: DataContext):
 
     def updatestockdata(stockdata: pd.DataFrame, isnewrow: bool = False):
         def getrecordtime(period: int):
+            # For debug when out of market time
+            # if True:
+            #    return datetime.datetime.combine(current_date, datetime.time(hour=current_time.hour))
             if period == 15 or period == 30:
                 slot = current_time.minute // period + 1
                 if slot == 60 // period:
-                    recordtime = datetime.datetime.combine(
-                        datetime.date(year=current_time.year, month=current_time.month,
-                                      day=current_time.day),
-                        datetime.time(hour=current_time.hour + 1))
+                    recordtime = datetime.datetime.combine(current_date, datetime.time(hour=current_time.hour + 1))
                 else:
-                    recordtime = datetime.datetime.combine(
-                        datetime.date(year=current_time.year, month=current_time.month,
-                                      day=current_time.day),
-                        datetime.time(hour=current_time.hour, minute=slot * period))
+                    recordtime = datetime.datetime.combine(current_date, datetime.time(hour=current_time.hour, minute=slot * period))
             elif period == 60:
                 if DataContext.iscountryChina():
                     if (current_time - opentime) >= target_time and (breakstarttime - current_time) >= target_time:
                         slot = (current_time - opentime).seconds // (period * 60) + 1
-                        recordtime = datetime.datetime.combine(
-                            datetime.date(year=current_time.year, month=current_time.month,
-                                          day=current_time.day),
-                            datetime.time(hour=opentime.hour + slot, minute=opentime.minute))
+                        recordtime = datetime.datetime.combine(current_date, datetime.time(hour=opentime.hour + slot, minute=opentime.minute))
                     else:
                         slot = (current_time - breakstoptime).seconds // (period * 60) + 1
-                        recordtime = datetime.datetime.combine(
-                            datetime.date(year=current_time.year, month=current_time.month,
-                                          day=current_time.day),
-                            datetime.time(hour=breakstoptime.hour + slot))
+                        recordtime = datetime.datetime.combine(current_date, datetime.time(hour=breakstoptime.hour + slot))
                 elif DataContext.iscountryUS():
                     if target_time <= (closetime - current_time) <= datetime.timedelta(days=0, hours=0, minutes=30,
                                                                                        seconds=0):
-                        recordtime = datetime.datetime.combine(
-                            datetime.date(year=current_time.year, month=current_time.month,
-                                          day=current_time.day),
-                            datetime.time(hour=closetime.hour))
+                        recordtime = datetime.datetime.combine(current_date, datetime.time(hour=closetime.hour))
 
                     else:
                         slot = (current_time - opentime).seconds // (period * 60) + 1
-                        recordtime = datetime.datetime.combine(
-                            datetime.date(year=current_time.year, month=current_time.month,
-                                          day=current_time.day),
-                            datetime.time(hour=opentime.hour + slot, minute=opentime.minute))
+                        recordtime = datetime.datetime.combine(current_date, datetime.time(hour=opentime.hour + slot, minute=opentime.minute))
 
             return recordtime
 
@@ -1756,12 +1879,15 @@ def snapshot(context: DataContext):
                         sum_volume += dataset.iloc[start - j]['volume']
                     else:
                         sum_volume += dataset.iloc[start + j]['volume']
-            except Exception as ee:
+            except Exception as exce:
                 # traceback.print_exc()
-                logger.error("Symbol error occurred with {} error message is {}".format(dataset.iloc[-1]['gid'], ee))
+                logger.error("Symbol error occurred with {} error message is {}".format(dataset.iloc[-1]['gid'], exce))
             return sum_volume
 
-        def updateexistingrow(firstk: bool, barcounter: int, dataset: pd.DataFrame):
+        def updateexistingrow(firstk: bool, barcounter: int, dataset: pd.DataFrame, isdayk: bool=False):
+            if isdayk:
+                dataset.loc[dataset.index[-1]] = [symbol_idx, row['OPEN'], row['NOW'], row['HIGH'], row['LOW'], row['VOLUME']]
+                return
             if firstk:
                 volume_cur_i = row['VOLUME']
             else:
@@ -1775,6 +1901,11 @@ def snapshot(context: DataContext):
             if row['NOW'] < cur_low:
                 cur_low = row['NOW']
             dataset.loc[dataset.index[-1]] = [symbol_idx, open_tmp, row['NOW'], cur_high, cur_low, volume_cur_i]
+
+        if fetchdatacounter == 1:
+            isfirstK_240 = True
+        else:
+            isfirstK_240 = False
 
         if firstroundresult_60 == roundresult_60:
             isfirstK_60 = True
@@ -1816,6 +1947,7 @@ def snapshot(context: DataContext):
                     tmpdata = context.data15mins[sector_code].get(symbol_idx)
                     tmpdata_30 = context.data30mins[sector_code].get(symbol_idx)
                     tmpdata_60 = context.data60mins[sector_code].get(symbol_idx)
+                    tmpdata_240 = context.data240mins[sector_code].get(symbol_idx)
                     row = stockdata.loc[index]
                     # create a new row based on the period of 15 mins and it represent the next period because it is the
                     # beginning of the next period so that it is needed to use next record time as index
@@ -1854,10 +1986,18 @@ def snapshot(context: DataContext):
                                                                              row['NOW'], row['NOW'], volume_cur]
                             else:
                                 updateexistingrow(isfirstK_60, barcounter_60, tmpdata_60)
+
+                        if isfirstK_240:
+                            tmpdata_240.loc[pd.Timestamp(current_date)] = [symbol_idx, row['OPEN'], row['NOW'], row['HIGH'],
+                                                                           row['LOW'], row['VOLUME']]
+                        else:
+                            updateexistingrow(isfirstK_240, -1, tmpdata_240, True)
+
                     else:
                         updateexistingrow(isfirstk_15, barcounter_15, tmpdata)
                         updateexistingrow(isfirstK_30, barcounter_30, tmpdata_30)
                         updateexistingrow(isfirstK_60, barcounter_60, tmpdata_60)
+                        updateexistingrow(isfirstK_240, -1, tmpdata_240, True)
                     break
 
     calcrankofchange()
@@ -1874,7 +2014,7 @@ def snapshot(context: DataContext):
             # 1) french data
             logger.debug("totally scan %d stocks but the number of original stock codes is %d" %
                          (len(symbols_exchange), symbols_original_len))
-            stock_data = csqsnapshot_t(symbols_exchange, "NOW,VOLUME", "Ispandas=1")
+            stock_data = csqsnapshot_t(symbols_exchange, "NOW,VOLUME,OPEN,HIGH,LOW", "Ispandas=1")
             if not isinstance(stock_data, c.EmQuantData):
                 if not isinstance(stock_data, pd.DataFrame):
                     logger.debug("request csqsnapshot Error at {} ".format(current_time) +
@@ -1926,7 +2066,7 @@ def snapshot(context: DataContext):
                     updatestockdata(stock_data)
                 logger.debug("update stock data in context")
                 # 3) calculate indicators
-                logger.debug("run 4 strategies")
+                logger.debug("run 6 strategies")
                 try:
                     result = {current_time: quantstrategies(context)}
                 except Exception as ee:
@@ -1939,6 +2079,7 @@ def snapshot(context: DataContext):
                 logger.debug("send result to another thread to handle and sleep")
                 if closetime - current_time > datetime.timedelta(minutes=5):
                     logger.debug("start to sleep with 3 minutes")
+                    # TODO: replace sleep() with threading.Timer()
                     time.sleep(180)
                     logger.debug("sleep is done with 3 minutes")
                 else:
@@ -1979,6 +2120,27 @@ def quantstrategies(context: DataContext):
         sector_tmp = stock_group[sector_usd]
         for symbol_tmp in context.symbols[sector_tmp]:
             results = {}
+            dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
+            if len(dataset_240) == 0:
+                continue
+            strategy_dayk = StrategyBasedOnDayKAction(dataset_240)
+            valid_240_amplitude, result_amplitude_240 = strategy_dayk.executeaction(operation='amplitude_avg',
+                                                                                    amplitude_peroid=5,
+                                                                                    amplitude_percent=3)
+            if valid_240_amplitude:
+                if len(result_amplitude_240) > 0:
+                    results[DataContext.strategy100] = result_amplitude_240
+                    resultdata[symbol_tmp] = results
+                else:
+                    continue
+            else:
+                logger.error("strategy_amplitude_avg_240 is failed on {}".format(symbol_tmp))
+                continue
+
+            dataset_30 = context.data30mins[sector_tmp].get(symbol_tmp)
+            kd_cross_30 = StrategyBasedOnKDAction(dataset_30)
+            kd_indicator_30 = KDAction(dataset_30, context.rsv_period, context.k_period, context.d_period)
+            valid_kd_30, k_v_30, d_v_30 = kd_indicator_30.executeaction()
             sma_cross = CROSSUpSMAAction(context.data15mins[sector_tmp].get(symbol_tmp))
             valid, result_tmp = sma_cross.executeaction(startindex=context.start_i, endindex=context.end_i,
                                                         cross_period=context.cross_sma_period,
@@ -2002,48 +2164,66 @@ def quantstrategies(context: DataContext):
                                                                                     hour=time_stamp_original.hour + 1)))
                         time_sequence.append(time_stamp)
 
-                    kd_cross = StrategyBasedOnKDAction(context.data30mins[sector_tmp].get(symbol_tmp))
-                    valid, result_tmp = kd_cross.executeaction(occurrence_time=time_sequence,
-                                                               operation='cross_up',
-                                                               rsv_period=context.rsv_period,
-                                                               k_period=context.k_period,
-                                                               d_period=context.d_period,
-                                                               crossvalue=(False, 0))
-                    if valid:
-                        # FIXME
-                        '''
-                        if len(result_tmp) > 0:
-                            obv_up = OBVUpACTION(context.data30mins[sector_tmp].get(symbol_tmp))
-                            valid, result_tmp = obv_up.executeaction(occurrence_time=result_tmp['time'],
-                                                                     obv_period=context.obv_period,
-                                                                     obv_a_period=context.obv_a_period)
-                            if valid:
-                                if len(result_tmp) > 0:
-                                    results[DataContext.strategy1] = result_tmp
-                                    resultdata[symbol_tmp] = results
-                            else:
-                                logger.error("strategy_obv_up_30 is failed on {}".format(symbol_tmp))
-                        '''
-                        if len(result_tmp) > 0:
-                            results[DataContext.strategy1] = result_tmp
-                            resultdata[symbol_tmp] = results
-                    else:
+                    if not valid_kd_30:
                         logger.error("strategy_cross_kd_30 is failed on {}".format(symbol_tmp))
+                    else:
+                        valid, result_tmp = kd_cross_30.executeaction(occurrence_time=time_sequence,
+                                                                      operation='cross_up',
+                                                                      KValues=k_v_30,
+                                                                      DValues=d_v_30,
+                                                                      crossvalue=(False, 0))
+                        if valid:
+                            # FIXME
+                            '''
+                            if len(result_tmp) > 0:
+                                obv_up = OBVUpACTION(context.data30mins[sector_tmp].get(symbol_tmp))
+                                valid, result_tmp = obv_up.executeaction(occurrence_time=result_tmp['time'],
+                                                                         obv_period=context.obv_period,
+                                                                         obv_a_period=context.obv_a_period)
+                                if valid:
+                                    if len(result_tmp) > 0:
+                                        results[DataContext.strategy1] = result_tmp
+                                        resultdata[symbol_tmp] = results
+                                else:
+                                    logger.error("strategy_obv_up_30 is failed on {}".format(symbol_tmp))
+                            '''
+                            if len(result_tmp) > 0:
+                                results[DataContext.strategy1] = result_tmp
+                                resultdata[symbol_tmp] = results
+                        else:
+                            logger.error("strategy_cross_kd_30 is failed on {}".format(symbol_tmp))
             else:
                 logger.error("strategy_cross_70 is failed on {}".format(symbol_tmp))
-
+            '''
+            if not valid_kd_30:
+                logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(symbol_tmp))
+            else:
+                valid_30_entangle_crossup_period, result_entangle_crossup_period_30 = \
+                    kd_cross_30.executeaction(occurrence_time=[dataset_30.index[-1]],
+                                              operation='entangle_and_cross_up_within_period',
+                                              KValues=k_v_30,
+                                              DValues=d_v_30,
+                                              periods=4,
+                                              duration=80,
+                                              crossvalue=(False, 0))
+                if valid_30_entangle_crossup_period:
+                    if len(result_entangle_crossup_period_30) > 0:
+                        results[DataContext.strategy6] = result_entangle_crossup_period_30
+                        resultdata[symbol_tmp] = results
+                else:
+                    logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(symbol_tmp))
+            '''
             dataset_60 = context.data60mins[sector_tmp].get(symbol_tmp)
-
             if len(dataset_60) == 0:
                 continue
-
-            kd_indicator = KDAction(dataset_60, context.rsv_period, context.k_period, context.d_period)
-            valid_kd_60, k_v_60, d_v_60 = kd_indicator.executeaction()
+            kd_indicator_60 = KDAction(dataset_60, context.rsv_period, context.k_period, context.d_period)
+            valid_kd_60, k_v_60, d_v_60 = kd_indicator_60.executeaction()
             if not valid_kd_60:
+                logger.error("all strategies based on period 60 are failed on {}".format(symbol_tmp))
                 continue
 
-            kd_cross_value = StrategyBasedOnKDAction(dataset_60)
-            valid_60, result_tmp_60 = kd_cross_value.executeaction(occurrence_time=[dataset_60.index[-1]],
+            strategy_hourk = StrategyBasedOnKDAction(dataset_60)
+            valid_60, result_tmp_60 = strategy_hourk.executeaction(occurrence_time=[dataset_60.index[-1]],
                                                                    operation='cross_up',
                                                                    crossvalue=(True, 30),
                                                                    KValues=k_v_60,
@@ -2055,13 +2235,12 @@ def quantstrategies(context: DataContext):
             else:
                 logger.error("strategy_cross_kd_60 is failed on {}".format(symbol_tmp))
 
-            kd_entangle_value = StrategyBasedOnKDAction(dataset_60)
-            valid_60_entangle, result_entangle_60 = kd_entangle_value.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                                                                    operation='entangle',
-                                                                                    crossvalue=(True, 30),
-                                                                                    periods=4,
-                                                                                    KValues=k_v_60,
-                                                                                    DValues=d_v_60)
+            valid_60_entangle, result_entangle_60 = strategy_hourk.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                                                                 operation='entangle',
+                                                                                 crossvalue=(True, 30),
+                                                                                 periods=4,
+                                                                                 KValues=k_v_60,
+                                                                                 DValues=d_v_60)
             if valid_60_entangle:
                 if len(result_entangle_60) > 0:
                     results[DataContext.strategy3] = result_entangle_60
@@ -2069,19 +2248,34 @@ def quantstrategies(context: DataContext):
             else:
                 logger.error("strategy_entangle_kd_60 is failed on {}".format(symbol_tmp))
 
-            kd_entangle_crossup_value = StrategyBasedOnKDAction(dataset_60)
-            valid_60_entangle_crossup, result_entangle_crossup_60 = kd_entangle_crossup_value.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                                                                                            operation='entangle_and_cross_up',
-                                                                                                            crossvalue=(True, 30),
-                                                                                                            periods=4,
-                                                                                                            KValues=k_v_60,
-                                                                                                            DValues=d_v_60)
+            valid_60_entangle_crossup, result_entangle_crossup_60 = strategy_hourk.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                                                                                 operation='entangle_and_cross_up',
+                                                                                                 crossvalue=(True, 30),
+                                                                                                 periods=4,
+                                                                                                 KValues=k_v_60,
+                                                                                                 DValues=d_v_60)
             if valid_60_entangle_crossup:
                 if len(result_entangle_crossup_60) > 0:
                     results[DataContext.strategy4] = result_entangle_crossup_60
                     resultdata[symbol_tmp] = results
             else:
                 logger.error("strategy_entangle_crossup_kd_60 is failed on {}".format(symbol_tmp))
+
+            valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
+                strategy_hourk.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                             operation='entangle_and_cross_up_within_period',
+                                             crossvalue=(False, 0),
+                                             periods=4,
+                                             duration=40,
+                                             KValues=k_v_60,
+                                             DValues=d_v_60)
+
+            if valid_60_entangle_crossup_period:
+                if len(result_entangle_crossup_period_60) > 0:
+                    results[DataContext.strategy5] = result_entangle_crossup_period_60
+                    resultdata[symbol_tmp] = results
+            else:
+                logger.error("strategy_entangle_crossup_period_kd_60 is failed on {}".format(symbol_tmp))
 
         totalresultdata[sector_tmp] = resultdata
     return totalresultdata
@@ -2179,15 +2373,30 @@ def summarytotalresult(context: DataContext):
     with open(filepath, 'w+') as file:
         for strategy_t, symbols in context.totalresult.items():
             str101 = ""
-            if strategy_t == DataContext.strategy4:
+            '''
+            if strategy_t == DataContext.strategy6:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略6 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
+                str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
+            '''
+            if strategy_t == DataContext.strategy5:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略5 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  1. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
+                str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
+            elif strategy_t == DataContext.strategy4:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略4 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n"
                 str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
             elif strategy_t == DataContext.strategy3:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略3 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n\r\n"
             elif strategy_t == DataContext.strategy1:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略1 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
                 str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
                 str101 += "  3. KD指标在30分钟周期形成金叉\r\n\r\n"
@@ -2195,6 +2404,7 @@ def summarytotalresult(context: DataContext):
                 # str101 += "  4. OBV指标在30分钟周期大于零且大于30天均值\r\n\r\n"
             elif strategy_t == DataContext.strategy2:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略2 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  1. 收盘价在60分钟周期不大于50\r\n"
                 str101 += "  2. KD指标在60分钟周期形成金叉且金叉小于30\r\n\r\n"
             elif strategy_t == DataContext.strategy1_2:
@@ -2254,12 +2464,29 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
             append_value(context.totalresult[strategy], symbol_s, CalcResult(keytime, row[7]))
 
     def calcresult(strategy_n: str):
+        # result_c = set(symbols[strategy_n]).intersection(result_c_s100)
         result_c = set(symbols[strategy_n])
-        result_h = set(context.totalresult[strategy_n].keys()) - result_c
         logger.info("%d symbols found with %s at %s" % (len(result_c), strategy_n, keytime))
-        return result_c, result_h
+        return result_c
+
+    '''
+    result_h_s100 = set(context.totalresult[DataContext.strategy100].keys())
+    result_h_s1 = set(context.totalresult[DataContext.strategy1].keys()).intersection(result_h_s100)
+    result_h_s2 = set(context.totalresult[DataContext.strategy2].keys()).intersection(result_h_s100)
+    result_h_s3 = set(context.totalresult[DataContext.strategy3].keys()).intersection(result_h_s100)
+    result_h_s4 = set(context.totalresult[DataContext.strategy4].keys()).intersection(result_h_s100)
+    result_h_s5 = set(context.totalresult[DataContext.strategy5].keys()).intersection(result_h_s100)
+    # result_h_s6 = set(context.totalresult[DataContext.strategy6].keys()).intersection(result_h_s100)
+    '''
+    result_h_s1 = set(context.totalresult[DataContext.strategy1].keys())
+    result_h_s2 = set(context.totalresult[DataContext.strategy2].keys())
+    result_h_s3 = set(context.totalresult[DataContext.strategy3].keys())
+    result_h_s4 = set(context.totalresult[DataContext.strategy4].keys())
+    result_h_s5 = set(context.totalresult[DataContext.strategy5].keys())
+
     keytime = datetime.datetime.now()
-    symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: [], DataContext.strategy4: []}
+    symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: [], DataContext.strategy4: [],
+               DataContext.strategy5: [], DataContext.strategy6: [], DataContext.strategy100: []}
     for time_result, result in result_transient.items():
         keytime = time_result
         for index, value in result.items():
@@ -2279,11 +2506,25 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
                     elif index_2 == DataContext.strategy4:
                         for row in value_2.itertuples(index=False):
                             assembleFunc(index_1, DataContext.strategy4)
-
-    result_c_s1, result_h_s1 = calcresult(DataContext.strategy1)
-    result_c_s2, result_h_s2 = calcresult(DataContext.strategy2)
-    result_c_s3, result_h_s3 = calcresult(DataContext.strategy3)
-    result_c_s4, result_h_s4 = calcresult(DataContext.strategy4)
+                    elif index_2 == DataContext.strategy5:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy5)
+                    elif index_2 == DataContext.strategy100:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy100)
+                    '''        
+                    elif index_2 == DataContext.strategy6:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy6)
+                    '''
+    #result_c_s100 = set(symbols[DataContext.strategy100])
+    result_c_s100 = calcresult(DataContext.strategy100)
+    result_c_s1 = calcresult(DataContext.strategy1)
+    result_c_s2 = calcresult(DataContext.strategy2)
+    result_c_s3 = calcresult(DataContext.strategy3)
+    result_c_s4 = calcresult(DataContext.strategy4)
+    result_c_s5 = calcresult(DataContext.strategy5)
+    # result_c_s6 = calcresult(DataContext.strategy6)
     result_c_s1_2 = result_c_s1.intersection(result_c_s2).union(result_c_s1.intersection(result_h_s2))
     result_h_s1_2 = result_h_s1.intersection(result_h_s2).union(result_h_s1.intersection(result_c_s2))
     for result_1_2 in result_c_s1_2:
@@ -2294,12 +2535,14 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     for result_1_4 in result_c_s1_4:
         append_value(context.totalresult[DataContext.strategy1_4], result_1_4, CalcResult(keytime, True))
     logger.info("%d symbols found with strategy 1 and 4 at %s" % (len(result_c_s1_4), keytime))
-    ret = {keytime: {DataContext.strategy4: [result_c_s4, result_h_s4],
+    ret = {keytime: {DataContext.strategy5: [result_c_s5, result_h_s5],
+                     DataContext.strategy4: [result_c_s4, result_h_s4],
                      DataContext.strategy1_4: [result_c_s1_4, result_h_s1_4],
                      DataContext.strategy3: [result_c_s3, result_h_s3],
                      DataContext.strategy1_2: [result_c_s1_2, result_h_s1_2],
                      DataContext.strategy1: [result_c_s1, result_h_s1],
                      DataContext.strategy2: [result_c_s2, result_h_s2]}}
+                     # DataContext.strategy6: [result_c_s6, result_h_s6],
     return ret
 
 
@@ -2394,15 +2637,30 @@ def handleresultlocked(resultf, context: DataContext):
         with open(filepath, 'w+') as file:
             for strategy_t, symbols_l in result.items():
                 str101 = ""
-                if strategy_t == DataContext.strategy4:
+                '''
+                if strategy_t == DataContext.strategy6:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略6 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
+                    str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
+                '''
+                if strategy_t == DataContext.strategy5:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略5 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  1. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
+                    str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
+                elif strategy_t == DataContext.strategy4:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略4 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n"
                     str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
                 elif strategy_t == DataContext.strategy3:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略3 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n\r\n"
                 elif strategy_t == DataContext.strategy1:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略1 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
                     str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
                     str101 += "  3. KD指标在30分钟周期形成金叉\r\n\r\n"
@@ -2410,6 +2668,7 @@ def handleresultlocked(resultf, context: DataContext):
                     # str101 += "  4. OBV指标在30分钟周期大于零且大于30天均值\r\n\r\n"
                 elif strategy_t == DataContext.strategy2:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略2 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  1. 收盘价在60分钟周期不大于50\r\n"
                     str101 += "  2. KD指标在60分钟周期形成金叉且金叉小于30\r\n\r\n"
                 elif strategy_t == DataContext.strategy1_2:
@@ -2448,33 +2707,35 @@ def calconhistory(context: DataContext):
     logout_em()
 
 
-def updatedatabaselocked(board: str):
+def updatedatabaselocked(board: str, source: DataSource = DataSource.AK_SHARE):
     logger.debug("The board data is downloaded for is {} and native thread id is {} and thread ident is {}".
                  format(board, threading.get_native_id(), threading.get_ident()))
     retriedstocks = {}
-    loaddatainternal([board], 2, retried=retriedstocks, datasource=DataSource.EAST_MONEY)
+    loaddatainternal([board], 2, retried=retriedstocks, datasource=source)
     reloaddata(retriedstocks)
     logger.debug("Download data is done for the board {} and thread id is {} and thread ident is {}".
                  format(board, threading.get_native_id(), threading.get_ident()))
 
 
-def updatedatabase():
-    timedelta = datetime.timedelta(minutes=10)
-    today = datetime.datetime.today()
-    time_download = datetime.datetime.combine(datetime.date(year=today.year, month=today.month, day=today.day),
-                                              datetime.time(hour=17, minute=30))
-    while True:
-        if (datetime.datetime.now() - time_download) > timedelta:
-            break
-        else:
-            time.sleep(600)
+def updatedatabase(is_auto=False, source: DataSource = DataSource.AK_SHARE):
+    if is_auto:
+        timedelta = datetime.timedelta(minutes=10)
+        today = datetime.datetime.today()
+        time_download = datetime.datetime.combine(datetime.date(year=today.year, month=today.month, day=today.day),
+                                                  datetime.time(hour=17, minute=30))
+        while True:
+            if (datetime.datetime.now() - time_download) > timedelta:
+                break
+            else:
+                time.sleep(600)
 
     if DataContext.iscountryChina():
         threads = []
         for market in DataContext.markets:
-            thread = threading.Thread(target=updatedatabaselocked, args=(market,))
+            thread = threading.Thread(target=updatedatabaselocked, args=(market, source,))
             thread.start()
             threads.append(thread)
+        loaddata(DataContext.markets, 2, datasource=DataSource.EAST_MONEY, period=240, type_func=2, isloginAlready=True)
         for i in range(len(threads)):
             threads[i].join()
     if DataContext.iscountryUS():
@@ -2556,7 +2817,7 @@ def pre_exec(country: CountryCode):
 
 
 def post_exec():
-    updatedatabase()
+    updatedatabase(True, DataSource.EAST_MONEY)
     logout_em()
     if getdbconn():
         getdbconn().cursor().close()
@@ -2635,10 +2896,14 @@ def backtest(context: DataContext):
 
 
 if __name__ == '__main__':
+    # ["科创板", "创业板", "中小企业板", "主板A股", "主板"]
     # DataContext.initklz(CountryCode.CHINA)
-    # loaddata(DataContext.markets, 2, datasource=DataSource.AK_SHARE)
-    # loaddata(["创业板"], 3, c_point=300470, datasource=DataSource.EAST_MONEY)
-    # loaddata(["创业板"], 2, datasource=DataSource.EAST_MONEY)
+    # loaddata(["主板A股"], 2, datasource=DataSource.AK_SHARE)
+    # loaddata(["主板A股"], 3, c_point=603721, datasource=DataSource.AK_SHARE)
+    # login_em(isforcelogin=False)
+    # loaddata(["科创板"], 2, datasource=DataSource.EAST_MONEY)
+    # loaddata(DataContext.markets, 2, datasource=DataSource.EAST_MONEY, period=240, type_func=2)
+
 
     dcon = pre_exec(CountryCode.CHINA)
     # dcon = pre_exec(CountryCode.US)
@@ -2648,6 +2913,7 @@ if __name__ == '__main__':
     time.sleep(60)
     post_exec()
 
+
     # DataContext.country = CountryCode.CHINA
     # checksymbols()
 
@@ -2655,13 +2921,16 @@ if __name__ == '__main__':
     # backtest(DataContext())
     # calconhistory(DataContext())
     # quantstrategies(DataContext())
+
     '''
     login_em(isforcelogin=False)
     DataContext.initklz(CountryCode.CHINA)
-    updatedatabase()
-    #loadsectorsfromEM()
+    updatedatabase(False, DataSource.EAST_MONEY)
+    # loadsectorsfromEM()
+    # reloaddata({})
     logout_em()
     '''
+
     # DataContext.country = CountryCode.US
     # loaddata(["NASDAQ", "NYSE", "AMEX"], 2, datasource=DataSource.YAHOO)
     # loaddata(["NASDAQ"], 3, c_point='AMBA', datasource=DataSource.YAHOO)
