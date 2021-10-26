@@ -880,7 +880,7 @@ class ActionBase:
         pass
 
 
-class SMAAction(ActionBase):
+class MAAction(ActionBase):
 
     def __init__(self, startindex: int, endindex: int, period: int, data: pd.DataFrame):
         super().__init__(data)
@@ -888,7 +888,7 @@ class SMAAction(ActionBase):
         self.__endindex = endindex
         self.__period = period
 
-    def __sma(self, fn_ticker):
+    def __ma(self, fn_ticker):
         ret = {}
         totalinperiod: float64 = 0
         traverseback = 1 - self.__period
@@ -921,7 +921,7 @@ class SMAAction(ActionBase):
         return True, ret
 
     def executeaction(self, **kwargs):
-        return self.__sma(kwargs['fn_ticker'])
+        return self.__ma(kwargs['fn_ticker'])
 
 
 class CROSSUpSMAAction(ActionBase):
@@ -950,9 +950,9 @@ class CROSSUpSMAAction(ActionBase):
         _cross_period = kwargs['cross_period']
         _greater_period = kwargs['greater_period']
         ret = pd.DataFrame(columns=columns)
-        sma_cross = SMAAction(index_s, index_e, _cross_period, self._data)
+        sma_cross = MAAction(index_s, index_e, _cross_period, self._data)
         valid_cross, result_cross = sma_cross.executeaction(fn_ticker=self.close_ticker)
-        sma_greater = SMAAction(index_s, index_e, _greater_period, self._data)
+        sma_greater = MAAction(index_s, index_e, _greater_period, self._data)
         valid_greater, result_greater = sma_greater.executeaction(fn_ticker=self.volume_ticker)
         if valid_cross:
             for index_cross, average_cross in result_cross.items():
@@ -970,6 +970,144 @@ class CROSSUpSMAAction(ActionBase):
             return True, ret
         else:
             return False, ret
+
+
+class XMAAction(ActionBase):
+    def __init__(self, data: pd.DataFrame):
+        super().__init__(data)
+
+    def executeaction(self, **kwargs):
+        def calc_xma(index):
+            if index < minlength - 1:
+                logger.error("length of data must be greater than {} for {} in {}}".
+                             format(minlength, reason, operationtype))
+                return False, values
+
+            valid_r, value_r = target(index)
+            intret = False
+            if valid_r:
+                if index == minlength - 1:
+                    values[index] = weight * (value_r - intvalue) + intvalue
+                    intret = True
+                else:
+                    index_p = index - 1
+                    intret = calc_xma(index_p)
+                    if intret:
+                        values[index] = weight * (value_r - values[index_p]) + values[index_p]
+            return valid_r and intret
+        minlength = kwargs['minlength']
+        target = kwargs['fnf']
+        weight = kwargs['weight']
+        intvalue = kwargs['intvalue']
+        reason = kwargs.get('reason', "")
+        operationtype = kwargs.get('operationtype', "")
+        values = [None for i in range(len(self._data.index))]
+        ret_v = calc_xma(len(self._data.index) - 1)
+        return ret_v, values
+
+
+class MACDAction(ActionBase):
+    def __init__(self, data: pd.DataFrame, short_period, long_period, m_period):
+        super().__init__(data)
+        self.__short_period = short_period
+        self.__long_period = long_period
+        self.__m_period = m_period
+        self.__data_length = self._data.index
+        self.__min_length = 1
+        self.__dif_long_v = [None for i in range(len(self.__data_length))]
+        self.__dif_short_v = [None for i in range(len(self.__data_length))]
+        self.__dif_v = [None for i in range(len(self.__data_length))]
+        self.__dea_v = [None for i in range(len(self.__data_length))]
+        self.__xma = XMAAction(data)
+
+    def __getCloseTicker(self, index):
+        valid = False
+        ret = None
+        if index < self.__min_length - 1:
+            logger.error("index is invalid in data for MACD", index)
+        else:
+            ret = self.close_ticker(index)
+            if ret is not None:
+                valid = True
+        return valid, ret
+
+    def __getdifvalue(self, index):
+        valid = False
+        ret = None
+        if index < self.__min_length - 1:
+            logger.error("index is invalid in data for MACD", index)
+        else:
+            ret = self.__dif_v[index]
+            if ret is not None:
+                valid = True
+        return valid, ret
+
+    def executeaction(self, **kwargs):
+        ret_v, self.__dif_long_v = self.__xma.executeaction(minlength=self.__min_length,
+                                                            fnf=self.__getCloseTicker,
+                                                            weight=2 / (self.__long_period + 1),
+                                                            intvalue=0,
+                                                            reason='MACD_dif_long',
+                                                            operationtype='EMA')
+        if ret_v:
+            ret_v, self.__dif_short_v = self.__xma.executeaction(minlength=self.__min_length,
+                                                                   fnf=self.__getCloseTicker,
+                                                                   weight=2 / (self.__short_period + 1),
+                                                                   intvalue=0,
+                                                                   reason='MACD_dif_short',
+                                                                   operationtype='EMA')
+            if ret_v:
+                index = 0
+                while index < self.__data_length:
+                    if self.__dif_short_v[index] is not None and self.__dif_long_v[index] is not None:
+                        self.__dif_v[index] = self.__dif_short_v[index] - self.__dif_long_v[index]
+                    index += 1
+
+                ret_v, self.__dea_v = self.__xma.executeaction(minlength=self.__min_length,
+                                                                     fnf=self.__getdifvalue,
+                                                                     weight=2 / (self.__m_period + 1),
+                                                                     intvalue=0,
+                                                                     reason='MACD_dea',
+                                                                     operationtype='EMA')
+        return ret_v, self.__dif_v, self.__dea_v
+
+
+class MACDGOUPAction(ActionBase):
+    def __init__(self, data: pd.DataFrame, period, short_period=12, long_period=26, m_period=9):
+        super().__init__(data)
+        self.__period = period
+        self.__macd = MACDAction(data, short_period, long_period, m_period)
+
+    def executeaction(self, **kwargs):
+        ret_valid = True
+        ret_value = pd.DataFrame(columns=columns)
+        ret_v, dif_v, dea_v = self.__macd.executeaction()
+        data_length = self._data.index
+        if ret_v and data_length >= self.__period:
+            count = 0
+            cursor = data_length - 1
+            while count < self.__period:
+                dif_c = dif_v[cursor]
+                dea_c = dea_v[cursor]
+                if dif_c is not None and dea_c is not None and dif_c > dea_c:
+                    if count < self.__period - 1:
+                        dif_p = dif_v[cursor - 1]
+                        dea_p = dea_v[cursor - 1]
+                        if not (dif_p is not None and dea_p is not None and dif_c > dif_p and dea_c > dea_p):
+                            ret_valid = False
+                            break
+                else:
+                    ret_valid = False
+                    break
+                count += 1
+                cursor -= 1
+            if ret_valid:
+                time_stamp = self._data.index[-1]
+                row = self._data.loc[time_stamp]
+                ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
+                                                 row['high'], row['low'], row['volume'],
+                                                 time_stamp, True]
+        return ret_valid, ret_value
 
 
 class LLVAction(ActionBase):
@@ -1024,8 +1162,9 @@ class KDAction(ActionBase):
         self.__hhvaction = HHVAction(self._data, self.__rsv_period)
         self.__k_v = [None for i in range(len(self._data.index))]
         self.__d_v = [None for i in range(len(self._data.index))]
+        self.__xma = XMAAction(data)
 
-    def rsv(self, index):
+    def __rsv(self, index):
         ret = 0
         valid1, result_llv = self.__llvaction.executeaction(fn_ticker=self.low_ticker, index_c=index)
         if not valid1:
@@ -1036,7 +1175,7 @@ class KDAction(ActionBase):
         ret = (self.close_ticker(index) - result_llv) / (result_hhv - result_llv) * 100
         return True, ret
 
-    def kvalue(self, index):
+    def __kvalue(self, index):
         valid = False
         ret = None
         if index < self.__rsv_period - 1 or index >= len(self.__k_v):
@@ -1047,6 +1186,7 @@ class KDAction(ActionBase):
                 valid = True
         return valid, ret
 
+    '''
     def sma(self, fnf, n, m, index, values):
         if index < self.__rsv_period - 1:
             logger.error("index must be greater than %d for KD in sma", self.__rsv_period - 1)
@@ -1054,7 +1194,7 @@ class KDAction(ActionBase):
         valid_r, value_r = fnf(index)
         k_t_v = False
         if valid_r:
-            if index == self.__rsv_period -1:
+            if index == self.__rsv_period - 1:
                 values[index] = (value_r*m + 50*(n-m))/n
                 k_t_v = True
             else:
@@ -1063,11 +1203,22 @@ class KDAction(ActionBase):
                 if k_t_v:
                     values[index] = (value_r*m + values[index_p]*(n-m))/n
         return valid_r and k_t_v
+    '''
 
     def executeaction(self, **kwargs):
-        index = len(self._data.index)-1
-        ret_v = self.sma(self.rsv, self.__k_period, 1, index, self.__k_v)
-        ret_v &= self.sma(self.kvalue, self.__d_period, 1, index, self.__d_v)
+        ret_v, self.__k_v = self.__xma.executeaction(minlength=self.__rsv_period,
+                                                     fnf=self.__rsv,
+                                                     weight=1/self.__k_period,
+                                                     intvalue=50,
+                                                     reason='KD_k',
+                                                     operationtype='SMA')
+        if ret_v:
+            ret_v, self.__d_v = self.__xma.executeaction(minlength=self.__rsv_period,
+                                                           fnf=self.__kvalue,
+                                                           weight=1/self.__d_period,
+                                                           intvalue=50,
+                                                           reason='KD_d',
+                                                           operationtype='SMA')
         return ret_v, self.__k_v, self.__d_v
 
 
@@ -1424,6 +1575,7 @@ class DataContext:
     strategy1_2 = 'strategy1and2'
     strategy1_4 = 'strategy1and4'
     strategy100 = 'strategy100'
+    strategy101 = 'strategy101'
 
     email_recipient = 'wsx_dna@sina.com'
 
@@ -1624,7 +1776,8 @@ class DataContext:
         self.totalresult = {DataContext.strategy1_4: {}, DataContext.strategy1_2: {},
                             DataContext.strategy5: {}, DataContext.strategy100: {},
                             DataContext.strategy4: {}, DataContext.strategy1: {},
-                            DataContext.strategy2: {}, DataContext.strategy3: {}}
+                            DataContext.strategy2: {}, DataContext.strategy3: {},
+                            DataContext.strategy101: {}}
                             # DataContext.strategy6: {}
         self.sectors = {}
 
@@ -2009,8 +2162,9 @@ def snapshot(context: DataContext):
                 or ((current_time - breakstoptime) >= target_time and (closetime - current_time) >= target_time))
         elif DataContext.iscountryUS():
             timecondition = (((current_time - opentime) >= target_time) and ((closetime - current_time) >= target_time))
-
-        if timecondition:
+        # FIXME
+        # if timecondition:
+        if True:
             # 1) french data
             logger.debug("totally scan %d stocks but the number of original stock codes is %d" %
                          (len(symbols_exchange), symbols_original_len))
@@ -2111,25 +2265,54 @@ def snapshot(context: DataContext):
             logger.debug("market is not open or break is ongoing so that await. Now is {}".format(current_time))
             time.sleep(10)
 
+
+lock_qm = threading.Lock()
+
+
 # TODO refactor below codes with command-chain pattern
 @time_measure
 def quantstrategies(context: DataContext):
     totalresultdata = {}
+    transientresult100 = context.totalresult[DataContext.strategy100]
     for sector_usd in context.markets:
         resultdata = {}
         sector_tmp = stock_group[sector_usd]
         for symbol_tmp in context.symbols[sector_tmp]:
             results = {}
-            dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
-            if len(dataset_240) == 0:
+
+            with lock_qm:
+                length_totalresult100 = len(transientresult100)
+                issymbolintotalresult100 = symbol_tmp in transientresult100
+
+            if length_totalresult100 > 0:
+                if not issymbolintotalresult100:
+                    continue
+            else:
+                dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
+                if len(dataset_240) == 0:
+                    continue
+                strategy_dayk = StrategyBasedOnDayKAction(dataset_240)
+                valid_240_amplitude, result_amplitude_240 = strategy_dayk.executeaction(operation='amplitude_avg',
+                                                                                        amplitude_peroid=5,
+                                                                                        amplitude_percent=3)
+                if valid_240_amplitude:
+                    if len(result_amplitude_240) > 0:
+                        results[DataContext.strategy100] = result_amplitude_240
+                        resultdata[symbol_tmp] = results
+                    else:
+                        continue
+                else:
+                    logger.error("strategy_amplitude_avg_240 is failed on {}".format(symbol_tmp))
+                    continue
+
+            dataset_60 = context.data60mins[sector_tmp].get(symbol_tmp)
+            if len(dataset_60) == 0:
                 continue
-            strategy_dayk = StrategyBasedOnDayKAction(dataset_240)
-            valid_240_amplitude, result_amplitude_240 = strategy_dayk.executeaction(operation='amplitude_avg',
-                                                                                    amplitude_peroid=5,
-                                                                                    amplitude_percent=3)
-            if valid_240_amplitude:
-                if len(result_amplitude_240) > 0:
-                    results[DataContext.strategy100] = result_amplitude_240
+            macd_go_60 = MACDGOUPAction(dataset_60, 4)
+            valid_60_macd, result_macd_60 = macd_go_60.executeaction()
+            if valid_60_macd:
+                if len(result_macd_60) > 0:
+                    results[DataContext.strategy101] = result_macd_60
                     resultdata[symbol_tmp] = results
                 else:
                     continue
@@ -2213,9 +2396,7 @@ def quantstrategies(context: DataContext):
                 else:
                     logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(symbol_tmp))
             '''
-            dataset_60 = context.data60mins[sector_tmp].get(symbol_tmp)
-            if len(dataset_60) == 0:
-                continue
+
             kd_indicator_60 = KDAction(dataset_60, context.rsv_period, context.k_period, context.d_period)
             valid_kd_60, k_v_60, d_v_60 = kd_indicator_60.executeaction()
             if not valid_kd_60:
@@ -2377,26 +2558,31 @@ def summarytotalresult(context: DataContext):
             if strategy_t == DataContext.strategy6:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略6 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                 str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                 str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
             '''
             if strategy_t == DataContext.strategy5:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略5 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                 str101 += "  1. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                 str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
             elif strategy_t == DataContext.strategy4:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略4 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                 str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n"
                 str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
             elif strategy_t == DataContext.strategy3:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略3 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                 str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n\r\n"
             elif strategy_t == DataContext.strategy1:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略1 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                 str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
                 str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
                 str101 += "  3. KD指标在30分钟周期形成金叉\r\n\r\n"
@@ -2405,6 +2591,7 @@ def summarytotalresult(context: DataContext):
             elif strategy_t == DataContext.strategy2:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略2 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                 str101 += "  1. 收盘价在60分钟周期不大于50\r\n"
                 str101 += "  2. KD指标在60分钟周期形成金叉且金叉小于30\r\n\r\n"
             elif strategy_t == DataContext.strategy1_2:
@@ -2469,15 +2656,6 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
         logger.info("%d symbols found with %s at %s" % (len(result_c), strategy_n, keytime))
         return result_c
 
-    '''
-    result_h_s100 = set(context.totalresult[DataContext.strategy100].keys())
-    result_h_s1 = set(context.totalresult[DataContext.strategy1].keys()).intersection(result_h_s100)
-    result_h_s2 = set(context.totalresult[DataContext.strategy2].keys()).intersection(result_h_s100)
-    result_h_s3 = set(context.totalresult[DataContext.strategy3].keys()).intersection(result_h_s100)
-    result_h_s4 = set(context.totalresult[DataContext.strategy4].keys()).intersection(result_h_s100)
-    result_h_s5 = set(context.totalresult[DataContext.strategy5].keys()).intersection(result_h_s100)
-    # result_h_s6 = set(context.totalresult[DataContext.strategy6].keys()).intersection(result_h_s100)
-    '''
     result_h_s1 = set(context.totalresult[DataContext.strategy1].keys())
     result_h_s2 = set(context.totalresult[DataContext.strategy2].keys())
     result_h_s3 = set(context.totalresult[DataContext.strategy3].keys())
@@ -2486,39 +2664,43 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
 
     keytime = datetime.datetime.now()
     symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: [], DataContext.strategy4: [],
-               DataContext.strategy5: [], DataContext.strategy6: [], DataContext.strategy100: []}
-    for time_result, result in result_transient.items():
-        keytime = time_result
-        for index, value in result.items():
-            for index_1, value_1 in value.items():
-                for index_2, value_2 in value_1.items():
-                    if index_2 == DataContext.strategy1:
-                        for row in value_2.itertuples(index=False):
-                            if row[7]:
-                                assembleFunc(index_1, DataContext.strategy1)
-                    elif index_2 == DataContext.strategy2:
-                        for row in value_2.itertuples(index=False):
-                            if row[2] <= 50:
-                                assembleFunc(index_1, DataContext.strategy2)
-                    elif index_2 == DataContext.strategy3:
-                        for row in value_2.itertuples(index=False):
-                            assembleFunc(index_1, DataContext.strategy3)
-                    elif index_2 == DataContext.strategy4:
-                        for row in value_2.itertuples(index=False):
-                            assembleFunc(index_1, DataContext.strategy4)
-                    elif index_2 == DataContext.strategy5:
-                        for row in value_2.itertuples(index=False):
-                            assembleFunc(index_1, DataContext.strategy5)
-                    elif index_2 == DataContext.strategy100:
-                        for row in value_2.itertuples(index=False):
-                            assembleFunc(index_1, DataContext.strategy100)
-                    '''        
-                    elif index_2 == DataContext.strategy6:
-                        for row in value_2.itertuples(index=False):
-                            assembleFunc(index_1, DataContext.strategy6)
-                    '''
-    #result_c_s100 = set(symbols[DataContext.strategy100])
-    result_c_s100 = calcresult(DataContext.strategy100)
+               DataContext.strategy5: [], DataContext.strategy6: [], DataContext.strategy100: [], DataContext.strategy101: []}
+    with lock_qm:
+        for time_result, result in result_transient.items():
+            keytime = time_result
+            for index, value in result.items():
+                for index_1, value_1 in value.items():
+                    for index_2, value_2 in value_1.items():
+                        if index_2 == DataContext.strategy1:
+                            for row in value_2.itertuples(index=False):
+                                if row[7]:
+                                    assembleFunc(index_1, DataContext.strategy1)
+                        elif index_2 == DataContext.strategy2:
+                            for row in value_2.itertuples(index=False):
+                                if row[2] <= 50:
+                                    assembleFunc(index_1, DataContext.strategy2)
+                        elif index_2 == DataContext.strategy3:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy3)
+                        elif index_2 == DataContext.strategy4:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy4)
+                        elif index_2 == DataContext.strategy5:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy5)
+                        elif index_2 == DataContext.strategy100:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy100)
+                        elif index_2 == DataContext.strategy101:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy101)
+                        '''        
+                        elif index_2 == DataContext.strategy6:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy6)
+                        '''
+    calcresult(DataContext.strategy100)
+    calcresult(DataContext.strategy101)
     result_c_s1 = calcresult(DataContext.strategy1)
     result_c_s2 = calcresult(DataContext.strategy2)
     result_c_s3 = calcresult(DataContext.strategy3)
@@ -2641,26 +2823,31 @@ def handleresultlocked(resultf, context: DataContext):
                 if strategy_t == DataContext.strategy6:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略6 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                     str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                     str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
                 '''
                 if strategy_t == DataContext.strategy5:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略5 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                     str101 += "  1. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                     str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
                 elif strategy_t == DataContext.strategy4:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略4 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                     str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n"
                     str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
                 elif strategy_t == DataContext.strategy3:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略3 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                     str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n\r\n"
                 elif strategy_t == DataContext.strategy1:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略1 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                     str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
                     str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
                     str101 += "  3. KD指标在30分钟周期形成金叉\r\n\r\n"
@@ -2669,6 +2856,7 @@ def handleresultlocked(resultf, context: DataContext):
                 elif strategy_t == DataContext.strategy2:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略2 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  0. MACD指标在60分钟周期上连续4个周期向上且快线大于慢线\r\n"
                     str101 += "  1. 收盘价在60分钟周期不大于50\r\n"
                     str101 += "  2. KD指标在60分钟周期形成金叉且金叉小于30\r\n\r\n"
                 elif strategy_t == DataContext.strategy1_2:
