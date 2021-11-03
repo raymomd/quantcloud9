@@ -1518,12 +1518,13 @@ class OBVUpACTION(ActionBase):
 class StrategyBasedOnDayKAction(ActionBase):
     def __init__(self, data: pd.DataFrame):
         super().__init__(data)
+        self.__min_length = 1
 
     def __getCloseTicker(self, index):
         valid = False
         ret = None
         if index < self.__min_length - 1:
-            logger.error("index is invalid in data for EMA based on DayK", index)
+            logger.error("index is invalid in data for EXPEMA", index)
         else:
             ret = self.close_ticker(index)
             if ret is not None:
@@ -1624,8 +1625,8 @@ class StrategyBasedOnDayKAction(ActionBase):
             ret_valid, ret_value_bool = self.__calcamplitudeavg(amplitude_period, amplitude_percent)
         elif operation == 'avg_k_go':
             ret_valid, ret_value_bool = self.__calckavg(avgk_k_period, avgk_calc_period, avgk_greater)
-        elif operation == 'ema_dif_go':
-            ret_valid, ret_value_bool = self.__calcemadif(avg_ema_dif_period)
+        elif operation == 'expma_dif_go':
+            ret_valid, ret_value_bool = self.__calcemadif(avg_ema_dif_period, avgk_calc_period)
         else:
             logger.error("%s is not supported!" % operation)
 
@@ -1703,6 +1704,7 @@ class DataContext:
     strategy101 = 'strategy101'
     strategy102 = 'strategy102'
     strategy103 = 'strategy103'
+    strategy104 = 'strategy104'
     strategy7 = 'strategy7'
     strategy8 = 'strategy8'
 
@@ -1908,7 +1910,8 @@ class DataContext:
                             DataContext.strategy2: {}, DataContext.strategy3: {},
                             DataContext.strategy101: {}, DataContext.strategy102: {},
                             DataContext.strategy6: {}, DataContext.strategy7: {},
-                            DataContext.strategy103: {}, DataContext.strategy8: {}}
+                            DataContext.strategy103: {}, DataContext.strategy8: {},
+                            DataContext.strategy104: {}}
         self.sectors = {}
 
         logger.debug("Initialization of context is done.")
@@ -2435,16 +2438,6 @@ def quantstrategies(context: DataContext):
                     logger.error("strategy_amplitude_avg_240 is failed on {}".format(symbol_tmp))
                     continue
 
-            dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
-            strategy_dayk = StrategyBasedOnDayKAction(dataset_240)
-            valid_240_ema_dif, result_ema_dif_240 = strategy_dayk.executeaction(operation='ema_dif_go')
-            if valid_240_ema_dif:
-                if len(result_ema_dif_240) > 0:
-                    results[DataContext.strategy8] = result_ema_dif_240
-                    resultdata[symbol_tmp] = results
-            else:
-                logger.error("strategy_ema_dif_go_240 is failed on {}".format(symbol_tmp))
-
             dataset_60 = context.data60mins[sector_tmp].get(symbol_tmp)
             if len(dataset_60) == 0:
                 continue
@@ -2459,6 +2452,18 @@ def quantstrategies(context: DataContext):
                     continue
             else:
                 logger.error("strategy_ma_avg_60 is failed on {}".format(symbol_tmp))
+                continue
+
+            expma_go_60 = StrategyBasedOnDayKAction(dataset_60)
+            valid_60_expema_dif, result_expema_dif_60 = expma_go_60.executeaction(operation='expma_dif_go')
+            if valid_60_expema_dif:
+                if len(result_expema_dif_60) > 0:
+                    results[DataContext.strategy104] = result_expema_dif_60
+                    resultdata[symbol_tmp] = results
+                else:
+                    continue
+            else:
+                logger.error("strategy_expma_dif_go_60 is failed on {}".format(symbol_tmp))
                 continue
 
             macd_go_60 = MACDGOUPAction(dataset_60, 2)
@@ -2730,31 +2735,32 @@ def summarytotalresult(context: DataContext):
     with open(filepath, 'w+') as file:
         for strategy_t, symbols in context.totalresult.items():
             str101 = ""
-            '''
             if strategy_t == DataContext.strategy6:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略6 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                 str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                 str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                 str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
-            '''
-            if strategy_t == DataContext.strategy8:
+            elif strategy_t == DataContext.strategy8:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略7 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
-                str101 += "  1. EXPMA指标在日线周期上快线当前向上\r\n"
-            if strategy_t == DataContext.strategy7:
+                str101 += "  1. EXPMA指标在日线周期形成金叉\r\n"
+            elif strategy_t == DataContext.strategy7:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略7 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  0. MACD指标在60分钟周期上快线当前向上\r\n"
                 str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
-                str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
-                str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
+                str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
+                str101 += "  1. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
+                str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
             elif strategy_t == DataContext.strategy5:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略5 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                 str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                 str101 += "  1. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                 str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
             elif strategy_t == DataContext.strategy4:
@@ -2762,6 +2768,7 @@ def summarytotalresult(context: DataContext):
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                 str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                 str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期\r\n"
                 str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
             elif strategy_t == DataContext.strategy3:
@@ -2769,12 +2776,14 @@ def summarytotalresult(context: DataContext):
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                 str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                 str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n\r\n"
             elif strategy_t == DataContext.strategy1:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略1 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                 str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                 str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
                 str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
                 str101 += "  3. KD指标在30分钟周期形成金叉\r\n\r\n"
@@ -2785,6 +2794,7 @@ def summarytotalresult(context: DataContext):
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                 str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                 str101 += "  1. 收盘价在60分钟周期不大于50\r\n"
                 str101 += "  2. KD指标在60分钟周期形成金叉且金叉小于30\r\n\r\n"
             elif strategy_t == DataContext.strategy1_2:
@@ -2855,13 +2865,14 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     result_h_s4 = set(context.totalresult[DataContext.strategy4].keys())
     result_h_s5 = set(context.totalresult[DataContext.strategy5].keys())
     result_h_s7 = set(context.totalresult[DataContext.strategy7].keys())
-    result_h_s8 = set(context.totalresult[DataContext.strategy8].keys())
+    # result_h_s8 = set(context.totalresult[DataContext.strategy8].keys())
 
 
     keytime = datetime.datetime.now()
     symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: [], DataContext.strategy4: [],
                DataContext.strategy5: [], DataContext.strategy6: [], DataContext.strategy100: [], DataContext.strategy101: [],
-               DataContext.strategy102: [], DataContext.strategy7: [], DataContext.strategy103: [], DataContext.strategy8: []}
+               DataContext.strategy102: [], DataContext.strategy7: [], DataContext.strategy103: [], DataContext.strategy8: [],
+               DataContext.strategy104: []}
     global lock_qm
     with lock_qm:
         for time_result, result in result_transient.items():
@@ -2903,9 +2914,14 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
                         elif index_2 == DataContext.strategy103:
                             for row in value_2.itertuples(index=False):
                                 assembleFunc(index_1, DataContext.strategy103)
+                        elif index_2 == DataContext.strategy104:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy104)
+                        '''        
                         elif index_2 == DataContext.strategy8:
                             for row in value_2.itertuples(index=False):
                                 assembleFunc(index_1, DataContext.strategy8)
+                        '''
                         '''        
                         elif index_2 == DataContext.strategy6:
                             for row in value_2.itertuples(index=False):
@@ -2915,13 +2931,14 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     calcresult(DataContext.strategy101)
     calcresult(DataContext.strategy102)
     calcresult(DataContext.strategy103)
+    calcresult(DataContext.strategy104)
     # result_c_s1 = calcresult(DataContext.strategy1)
     # result_c_s2 = calcresult(DataContext.strategy2)
     # result_c_s3 = calcresult(DataContext.strategy3)
     result_c_s4 = calcresult(DataContext.strategy4)
     result_c_s5 = calcresult(DataContext.strategy5)
     result_c_s7 = calcresult(DataContext.strategy7)
-    result_c_s7 = calcresult(DataContext.strategy8)
+    # result_c_s8 = calcresult(DataContext.strategy8)
     # result_c_s6 = calcresult(DataContext.strategy6)
     # result_c_s1_2 = result_c_s1.intersection(result_c_s2).union(result_c_s1.intersection(result_h_s2))
     # result_h_s1_2 = result_h_s1.intersection(result_h_s2).union(result_h_s1.intersection(result_c_s2))
@@ -2946,7 +2963,7 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     ret = {keytime: {DataContext.strategy7: [result_c_s7, result_h_s7],
                      DataContext.strategy5: [result_c_s5, result_h_s5],
                      DataContext.strategy4: [result_c_s4, result_h_s4],
-                     DataContext.strategy8: [result_c_s4, result_h_s8]
+                     # DataContext.strategy8: [result_c_s8, result_h_s8]
                      }}
     return ret
 
@@ -3042,31 +3059,32 @@ def handleresultlocked(resultf, context: DataContext):
         with open(filepath, 'w+') as file:
             for strategy_t, symbols_l in result.items():
                 str101 = ""
-                '''
                 if strategy_t == DataContext.strategy6:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略6 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                     str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                    str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                     str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                     str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
-                '''
-                if strategy_t == DataContext.strategy8:
+                elif strategy_t == DataContext.strategy8:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略7 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
-                    str101 += "  1. EXPMA指标在日线周期上快线当前向上\r\n"
-                if strategy_t == DataContext.strategy7:
+                    str101 += "  1. EXPMA指标在日线周期形成金叉\r\n"
+                elif strategy_t == DataContext.strategy7:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略7 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  0. MACD指标在60分钟周期上快线当前向上\r\n"
                     str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
-                    str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
-                    str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
+                    str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
+                    str101 += "  1. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
+                    str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
                 elif strategy_t == DataContext.strategy5:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略5 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                     str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                    str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                     str101 += "  1. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                     str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
                 elif strategy_t == DataContext.strategy4:
@@ -3074,6 +3092,7 @@ def handleresultlocked(resultf, context: DataContext):
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                     str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                    str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                     str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期\r\n"
                     str101 += "  2. KD指标在60分钟周期形成金叉\r\n\r\n"
                 elif strategy_t == DataContext.strategy3:
@@ -3081,12 +3100,14 @@ def handleresultlocked(resultf, context: DataContext):
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                     str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                    str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                     str101 += "  1. KD指标在60分钟周期至少持续纠缠4个周期且小于30\r\n\r\n"
                 elif strategy_t == DataContext.strategy1:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略1 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                     str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                    str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                     str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
                     str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
                     str101 += "  3. KD指标在30分钟周期形成金叉\r\n\r\n"
@@ -3097,6 +3118,7 @@ def handleresultlocked(resultf, context: DataContext):
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  0. MACD指标在60分钟周期上当前向上且快线大于慢线\r\n"
                     str101 += "  0. 20均线指标在60分钟周期上当前向上\r\n"
+                    str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                     str101 += "  1. 收盘价在60分钟周期不大于50\r\n"
                     str101 += "  2. KD指标在60分钟周期形成金叉且金叉小于30\r\n\r\n"
                 elif strategy_t == DataContext.strategy1_2:
