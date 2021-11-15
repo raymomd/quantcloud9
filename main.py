@@ -19,6 +19,7 @@ from queue import Queue
 from email.message import EmailMessage
 from email.mime.text import MIMEText
 import smtplib
+from MyTT import *
 
 
 # 列名与数据对其显示
@@ -1639,6 +1640,28 @@ class StrategyBasedOnDayKAction(ActionBase):
         return ret_valid, ret_value
 
 
+class EXPMACrossAction(ActionBase):
+    def __init__(self, data: pd.DataFrame):
+        super().__init__(data)
+
+    def executeaction(self, **kwargs):
+        ret_valid = True
+        ret_value = pd.DataFrame(columns=columns)
+        if len(self._data.close) < 2:
+            ret_valid = False
+            return ret_valid, ret_value
+        expma_12, expma_50 = EXPMA(self._data.close.values)
+        tmp_ret = CROSS(expma_12, expma_50)
+        if tmp_ret[-2] == 0 and tmp_ret[-1] == 1:
+            time_stamp = self._data.index[-1]
+            row = self._data.loc[time_stamp]
+            ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
+                                             row['high'], row['low'], row['volume'],
+                                             time_stamp, True]
+
+        return ret_valid, ret_value
+
+
 class StockData:
 
     def __init__(self, sector: str = ''):
@@ -1707,6 +1730,8 @@ class DataContext:
     strategy104 = 'strategy104'
     strategy7 = 'strategy7'
     strategy8 = 'strategy8'
+    strategy9 = 'strategy9'
+    strategy10 = 'strategy10'
 
     email_recipient = 'wsx_dna@sina.com'
 
@@ -1731,9 +1756,9 @@ class DataContext:
         DataContext.country = country_param
         if DataContext.iscountryChina():
             DataContext.limitfordatafetched = 160
-            DataContext.limitfordatafetched_30 = 120
-            DataContext.limitfordatafetched_60 = 80
-            DataContext.limitfordatafetched_240 = 30
+            DataContext.limitfordatafetched_30 = 160
+            DataContext.limitfordatafetched_60 = 160
+            DataContext.limitfordatafetched_240 = 128
             DataContext.markets = ["科创板", "创业板", "中小企业板", "主板A股", "主板"]
             DataContext.marketopentime = datetime.time(hour=9, minute=30)
             DataContext.marketclosetime = datetime.time(hour=15)
@@ -1911,7 +1936,8 @@ class DataContext:
                             DataContext.strategy101: {}, DataContext.strategy102: {},
                             DataContext.strategy6: {}, DataContext.strategy7: {},
                             DataContext.strategy103: {}, DataContext.strategy8: {},
-                            DataContext.strategy104: {}}
+                            DataContext.strategy104: {}, DataContext.strategy9: {},
+                            DataContext.strategy10: {}}
         self.sectors = {}
 
         logger.debug("Initialization of context is done.")
@@ -2438,9 +2464,38 @@ def quantstrategies(context: DataContext):
                     logger.error("strategy_amplitude_avg_240 is failed on {}".format(symbol_tmp))
                     continue
 
+            dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
+            expma_cross_240 = EXPMACrossAction(dataset_240)
+            valid_expma_240, value_240_expma = expma_cross_240.executeaction()
+            if valid_expma_240:
+                if len(value_240_expma) > 0:
+                    results[DataContext.strategy8] = value_240_expma
+                    resultdata[symbol_tmp] = results
+            else:
+                logger.error("strategy_expma_cross_240 is failed on {}".format(symbol_tmp))
+
+            dataset_30 = context.data240mins[sector_tmp].get(symbol_tmp)
+            expma_cross_30 = EXPMACrossAction(dataset_30)
+            valid_expma_30, value_30_expma = expma_cross_30.executeaction()
+            if valid_expma_30:
+                if len(value_30_expma) > 0:
+                    results[DataContext.strategy9] = value_30_expma
+                    resultdata[symbol_tmp] = results
+            else:
+                logger.error("strategy_expma_cross_30 is failed on {}".format(symbol_tmp))
+
             dataset_60 = context.data60mins[sector_tmp].get(symbol_tmp)
             if len(dataset_60) == 0:
                 continue
+
+            expma_cross_60 = EXPMACrossAction(dataset_60)
+            valid_expma_60, value_60_expma = expma_cross_60.executeaction()
+            if valid_expma_60:
+                if len(value_60_expma) > 0:
+                    results[DataContext.strategy10] = value_60_expma
+                    resultdata[symbol_tmp] = results
+            else:
+                logger.error("strategy_expma_cross_60 is failed on {}".format(symbol_tmp))
 
             ma_go_60 = StrategyBasedOnDayKAction(dataset_60)
             valid_60_ma, result_ma_60 = ma_go_60.executeaction(operation='avg_k_go')
@@ -2743,8 +2798,16 @@ def summarytotalresult(context: DataContext):
                 str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                 str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                 str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
+            elif strategy_t == DataContext.strategy10:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略10 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  1. EXPMA指标在60分钟周期形成金叉\r\n"
+            elif strategy_t == DataContext.strategy9:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略9 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  1. EXPMA指标在30分钟周期形成金叉\r\n"
             elif strategy_t == DataContext.strategy8:
-                str101 = "\r\n\r\n\r\n\r\n\r\n策略7 - 预警条件为:\r\n"
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略8 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                 str101 += "  1. EXPMA指标在日线周期形成金叉\r\n"
             elif strategy_t == DataContext.strategy7:
@@ -2865,14 +2928,15 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     result_h_s4 = set(context.totalresult[DataContext.strategy4].keys())
     result_h_s5 = set(context.totalresult[DataContext.strategy5].keys())
     result_h_s7 = set(context.totalresult[DataContext.strategy7].keys())
-    # result_h_s8 = set(context.totalresult[DataContext.strategy8].keys())
-
+    result_h_s8 = set(context.totalresult[DataContext.strategy8].keys())
+    result_h_s9 = set(context.totalresult[DataContext.strategy9].keys())
+    result_h_s10 = set(context.totalresult[DataContext.strategy10].keys())
 
     keytime = datetime.datetime.now()
     symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: [], DataContext.strategy4: [],
                DataContext.strategy5: [], DataContext.strategy6: [], DataContext.strategy100: [], DataContext.strategy101: [],
                DataContext.strategy102: [], DataContext.strategy7: [], DataContext.strategy103: [], DataContext.strategy8: [],
-               DataContext.strategy104: []}
+               DataContext.strategy104: [], DataContext.strategy9: [], DataContext.strategy10: []}
     global lock_qm
     with lock_qm:
         for time_result, result in result_transient.items():
@@ -2917,11 +2981,15 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
                         elif index_2 == DataContext.strategy104:
                             for row in value_2.itertuples(index=False):
                                 assembleFunc(index_1, DataContext.strategy104)
-                        '''        
                         elif index_2 == DataContext.strategy8:
                             for row in value_2.itertuples(index=False):
                                 assembleFunc(index_1, DataContext.strategy8)
-                        '''
+                        elif index_2 == DataContext.strategy9:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy9)
+                        elif index_2 == DataContext.strategy10:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy10)
                         '''        
                         elif index_2 == DataContext.strategy6:
                             for row in value_2.itertuples(index=False):
@@ -2938,7 +3006,9 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     result_c_s4 = calcresult(DataContext.strategy4)
     result_c_s5 = calcresult(DataContext.strategy5)
     result_c_s7 = calcresult(DataContext.strategy7)
-    # result_c_s8 = calcresult(DataContext.strategy8)
+    result_c_s8 = calcresult(DataContext.strategy8)
+    result_c_s9 = calcresult(DataContext.strategy9)
+    result_c_s10 = calcresult(DataContext.strategy10)
     # result_c_s6 = calcresult(DataContext.strategy6)
     # result_c_s1_2 = result_c_s1.intersection(result_c_s2).union(result_c_s1.intersection(result_h_s2))
     # result_h_s1_2 = result_h_s1.intersection(result_h_s2).union(result_h_s1.intersection(result_c_s2))
@@ -2960,11 +3030,12 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
                      DataContext.strategy2: [result_c_s2, result_h_s2],
                      # DataContext.strategy6: [result_c_s6, result_h_s6]}}
     '''
-    ret = {keytime: {DataContext.strategy7: [result_c_s7, result_h_s7],
+    ret = {keytime: {DataContext.strategy8: [result_c_s8, result_h_s8],
+                     DataContext.strategy10: [result_c_s10, result_h_s10],
+                     DataContext.strategy9: [result_c_s9, result_h_s9],
+                     DataContext.strategy7: [result_c_s7, result_h_s7],
                      DataContext.strategy5: [result_c_s5, result_h_s5],
-                     DataContext.strategy4: [result_c_s4, result_h_s4],
-                     # DataContext.strategy8: [result_c_s8, result_h_s8]
-                     }}
+                     DataContext.strategy4: [result_c_s4, result_h_s4]}}
     return ret
 
 
@@ -3067,8 +3138,16 @@ def handleresultlocked(resultf, context: DataContext):
                     str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                     str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                     str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
+                elif strategy_t == DataContext.strategy10:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略10 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  1. EXPMA指标在60分钟周期形成金叉\r\n"
+                elif strategy_t == DataContext.strategy9:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略9 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  1. EXPMA指标在30分钟周期形成金叉\r\n"
                 elif strategy_t == DataContext.strategy8:
-                    str101 = "\r\n\r\n\r\n\r\n\r\n策略7 - 预警条件为:\r\n"
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略8 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  1. EXPMA指标在日线周期形成金叉\r\n"
                 elif strategy_t == DataContext.strategy7:
@@ -3369,16 +3448,14 @@ if __name__ == '__main__':
     # backtest(DataContext())
     # calconhistory(DataContext())
     # quantstrategies(DataContext())
-
     '''
     login_em(isforcelogin=False)
     DataContext.initklz(CountryCode.CHINA)
-    updatedatabase(True, DataSource.EAST_MONEY)
+    updatedatabase(source=DataSource.EAST_MONEY)
     # loadsectorsfromEM()
     # reloaddata({})
     logout_em()
     '''
-
     # DataContext.country = CountryCode.US
     # loaddata(["NASDAQ", "NYSE", "AMEX"], 2, datasource=DataSource.YAHOO)
     # loaddata(["NASDAQ"], 3, c_point='AMBA', datasource=DataSource.YAHOO)
