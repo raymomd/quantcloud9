@@ -1073,7 +1073,7 @@ class MACDAction(ActionBase):
         return ret_v, self.__dif_v, self.__dea_v
 
 
-class MACDGOUPAction(ActionBase):
+class StrategyBasedonMACDAction(ActionBase):
     def __init__(self, data: pd.DataFrame, period, short_period=12, long_period=26, m_period=9):
         super().__init__(data)
         self.__period = period
@@ -1136,6 +1136,11 @@ class MACDGOUPAction(ActionBase):
                                 break
                     count += 1
                     cursor -= 1
+            elif operation == 'cross_up':
+                diff, dea, macd = MACD(self._data.close.values)
+                tmp_ret = CROSS(diff, dea)
+                if tmp_ret[-2] or not tmp_ret[-1]:
+                    ret_valid_int = False
             else:
                 ret_valid = False
                 ret_valid_int = False
@@ -1268,31 +1273,20 @@ class StrategyBasedOnKDAction(ActionBase):
         super().__init__(data)
 
     def crossupaction(self, time_stamp, k_v, d_v, c_v):
-        def comparevalue(k_cur: float64, d_cur: float64, k_pre: float64, d_pre: float64,
-                         k_pre2: float64, d_pre2: float64):
-            condition = k_cur > k_pre and k_cur > d_cur and k_pre <= d_pre
-            if k_pre2 is not None and d_pre2 is not None:
-                condition |= k_cur > k_pre == d_pre and k_pre2 <= d_pre2
-            return condition
-
         index_c = self.getindex(time_stamp)
         if index_c is None:
             return False
-        index_p, index_p2 = (index_c - 1, index_c - 2)
-        if k_v[index_c] is None or d_v[index_c] is None or index_p < 0 or k_v[index_p] is None or d_v[index_p] is None:
+        index_p = index_c - 1
+        length = len(self._data.index)
+        if index_c >= length or index_c < 0 or index_p >= length or index_p < 0:
             return False
         k_c_v = k_v[index_c]
         d_c_v = d_v[index_c]
         k_p_v = k_v[index_p]
         d_p_v = d_v[index_p]
-        k_p2_v = d_p2_v = None
-        if index_p2 >= 0:
-            k_p2_v = k_v[index_p2]
-            d_p2_v = d_v[index_p2]
-        if comparevalue(k_c_v, d_c_v, k_p_v, d_p_v, k_p2_v, d_p2_v):
+        if k_p_v < d_p_v and k_c_v > d_c_v:
             if c_v[0]:
-                if (not (k_c_v > c_v[1] and k_p_v > c_v[1]) and not (d_c_v > c_v[1] and d_p_v > c_v[1])) \
-                        or (k_p2_v is not None and d_p2_v is not None and k_p_v < c_v[1] and d_p_v < c_v[1]):
+                if not (k_c_v > c_v[1] and k_p_v > c_v[1]) and not (d_c_v > c_v[1] and d_p_v > c_v[1]):
                     return True
             else:
                 return True
@@ -1307,7 +1301,7 @@ class StrategyBasedOnKDAction(ActionBase):
             for ii in range(periods):
                 k_v_ii = kd_results[ii][0]
                 d_v_ii = kd_results[ii][1]
-                ret &= self.__compare_entanglement(k_v_ii, d_v_ii, 15)
+                ret &= self.__compare_entanglement(k_v_ii, d_v_ii, 10)
                 if not ret:
                     break
             return ret
@@ -1342,7 +1336,7 @@ class StrategyBasedOnKDAction(ActionBase):
                 return False
             k_v_c = k_v[index_c]
             d_v_c = d_v[index_c]
-            if self.__compare_entanglement(k_v_c, d_v_c, 15):
+            if self.__compare_entanglement(k_v_c, d_v_c, 10):
                 return self.entangleaction(time_stamp, periods, k_v, d_v, c_v)
             else:
                 index_p = index_c - 1
@@ -1378,21 +1372,94 @@ class StrategyBasedOnKDAction(ActionBase):
                 count += 1
             return False
 
-    def __compare_entanglement(self, k_v_t, d_v_t, percent):
-        ret = True
-        if k_v_t != 0 and d_v_t != 0:
-            if k_v_t > d_v_t:
-                ret = abs((k_v_t - d_v_t) / k_v_t) <= percent/100
+    def deviate_price_k_action(self, time_stamp, duration, k_values):
+        index_c = self.getindex(time_stamp)
+        if index_c is None:
+            return False
+        length = min(index_c + 1, duration)
+        count = 1
+        while count < length:
+            index = index_c - count
+            if self.close_ticker(index_c) < self.close_ticker(index) and \
+                    k_values[index_c] > k_values[index]:
+                return True
+            count += 1
+        return False
+
+    def deviate_price_k_s_action(self, time_stamp, duration, k_values, d_values):
+        def GeneralLine(x1, y1, x2, y2):
+            # general formula: Ax+By+C=0
+            A = y2 - y1
+            B = x1 - x2
+            C = x2 * y1 - x1 * y2
+            return A, B, C
+
+        def cal_Intersection_Lines(line1, line2):
+            A1, B1, C1 = GeneralLine(*line1)
+            A2, B2, C2 = GeneralLine(*line2)
+            D = A1 * B2 - A2 * B1
+            if D == 0:
+                return None
             else:
-                ret = abs((d_v_t - k_v_t) / d_v_t) <= percent/100
+                x = (B1 * C2 - B2 * C1) / D
+                y = (A2 * C1 - A1 * C2) / D
+            return x, y
+
+        tmp_time = datetime.time(hour=time_stamp.hour, minute=time_stamp.minute)
+        k_v = k_values
+        d_v = d_values
+        l_v = self._data.low.values
+        l_d = duration
+        if DataContext.iscountryChina():
+            if tmp_time == datetime.time(hour=10, minute=30):
+                k_v = REF(k_v, 1)
+                d_v = REF(d_v, 1)
+                l_v = REF(l_v, 1)
+                l_d += 1
+            elif tmp_time == datetime.time(hour=11, minute=30):
+                k_v = REF(k_v, 2)
+                d_v = REF(d_v, 2)
+                l_v = REF(l_v, 2)
+                l_d += 2
+            elif tmp_time == datetime.time(hour=14):
+                k_v = REF(k_v, 3)
+                d_v = REF(d_v, 3)
+                l_v = REF(l_v, 3)
+                l_d += 3
+            elif tmp_time == datetime.time(hour=15):
+                k_v = REF(k_v, 4)
+                d_v = REF(d_v, 4)
+                l_v = REF(l_v, 4)
+                l_d += 4
+            else:
+                return False
         else:
-            if k_v_t == d_v_t:
-                pass
-            elif k_v_t == 0:
-                ret = abs(d_v_t) < 2
-            else:
-                ret = abs(k_v_t) < 2
-        return ret
+            return False
+        min_low_current_v = LLV(self._data.low.values, l_d)
+        min_low_duration_v = LLV(l_v, duration)
+        cross_v = CROSS(k_v, d_v)
+        if len(k_v) < duration or len(d_v) < duration:
+            return False
+        count = -1
+        while count > - duration:
+            if not cross_v[count - 1] and cross_v[count]:
+                break
+            count -= 1
+        else:
+            return False
+        cross_point = cal_Intersection_Lines([0, d_v[count - 1], 1, d_v[count]],
+                                             [0, k_v[count - 1], 1, k_v[count]])
+        index_c = self.getindex(time_stamp)
+        if index_c is None:
+            return False
+        if self.close_ticker(index_c) == min_low_current_v[index_c] and \
+                (min_low_duration_v[-1] - self.close_ticker(index_c)) > min_low_duration_v[-1] * 1 / 100 and \
+                (k_values[index_c] - cross_point[1]) > cross_point[1] * 5 / 100:
+            return True
+        return False
+
+    def __compare_entanglement(self, k_v_t, d_v_t, diff_v):
+        return abs(k_v_t - d_v_t) <= diff_v
 
     def executeaction(self, **kwargs):
         def locdata():
@@ -1403,14 +1470,14 @@ class StrategyBasedOnKDAction(ActionBase):
 
         occurrences = kwargs['occurrence_time']
         operation = kwargs['operation']
-        c_v = kwargs['crossvalue']
+        c_v = kwargs.get('crossvalue', (False, 0))
         periods = kwargs.get('periods', 1)
         duration = kwargs.get('duration', 40)
-        rsv_p = kwargs.get('rsv_period')
-        k_p = kwargs.get('k_period')
-        d_p = kwargs.get('d_period')
-        k_v_o = kwargs.get('KValues')
-        d_v_o = kwargs.get('DValues')
+        rsv_p = kwargs.get('rsv_period', 9)
+        k_p = kwargs.get('k_period', 3)
+        d_p = kwargs.get('d_period', 3)
+        k_v_o = kwargs.get('KValues', None)
+        d_v_o = kwargs.get('DValues', None)
         ret_valid = True
         ret_value = pd.DataFrame(columns=columns)
         if k_v_o is not None and d_v_o is not None:
@@ -1418,11 +1485,13 @@ class StrategyBasedOnKDAction(ActionBase):
             k_v = k_v_o
             d_v = d_v_o
         else:
-            kd_indicator = KDAction(self._data, rsv_p, k_p, d_p)
-            valid, k_v, d_v = kd_indicator.executeaction()
+            # FIXME
+            # kd_indicator = KDAction(self._data, rsv_p, k_p, d_p)
+            # valid, k_v, d_v = kd_indicator.executeaction()
+            valid = True
+            k_v, d_v, j_v = KDJ(self._data.close.values, self._data.high.values, self._data.low.values)
         if valid:
             for time_stamp in occurrences:
-
                 if operation == 'cross_up':
                     if self.crossupaction(time_stamp, k_v, d_v, c_v):
                         locdata()
@@ -1434,6 +1503,12 @@ class StrategyBasedOnKDAction(ActionBase):
                         locdata()
                 elif operation == 'entangle_and_cross_up_within_period':
                     if self.crossup_entangle_period_action(time_stamp, periods, duration, k_v, d_v):
+                        locdata()
+                elif operation == 'divergence_price_lower_and_k_higher':
+                    if self.deviate_price_k_action(time_stamp, duration, k_v):
+                        locdata()
+                elif operation == 'divergence_price_lower_and_k_higher_simple':
+                    if self.deviate_price_k_s_action(time_stamp, duration, k_v, d_v):
                         locdata()
                 else:
                     logger.error("%s is not supported!" % operation)
@@ -1547,6 +1622,22 @@ class StrategyBasedOnDayKAction(ActionBase):
             ret_value_t = True
         return ret_valid_t, ret_value_t
 
+    def __calc_price_kavg(self, k_period, isgreater):
+        ret_valid_t = False
+        ret_value_t = False
+        if len(self._data.index) >= k_period:
+            start_index = end_index = -1
+            maaction = MAAction(start_index, end_index, k_period, self._data)
+            valid_ma, result_ma = maaction.executeaction(fn_ticker=self.close_ticker)
+            if valid_ma:
+                ret_valid_t = True
+                if start_index in result_ma:
+                    tmp_ret = self.close_ticker(start_index) >= result_ma[start_index]
+                    ret_value_t = not (isgreater ^ tmp_ret)
+
+        return ret_valid_t, ret_value_t
+
+
     def __calckavg(self, k_period, calc_period, isgreater):
         ret_valid_t = False
         ret_value_t = True
@@ -1626,6 +1717,8 @@ class StrategyBasedOnDayKAction(ActionBase):
             ret_valid, ret_value_bool = self.__calcamplitudeavg(amplitude_period, amplitude_percent)
         elif operation == 'avg_k_go':
             ret_valid, ret_value_bool = self.__calckavg(avgk_k_period, avgk_calc_period, avgk_greater)
+        elif operation == 'price_k_avg':
+            ret_valid, ret_value_bool = self.__calc_price_kavg(avgk_k_period, avgk_greater)
         elif operation == 'expma_dif_go':
             ret_valid, ret_value_bool = self.__calcemadif(avg_ema_dif_period, avgk_calc_period)
         else:
@@ -1732,6 +1825,9 @@ class DataContext:
     strategy8 = 'strategy8'
     strategy9 = 'strategy9'
     strategy10 = 'strategy10'
+    strategy11 = 'strategy11'
+    strategy12 = 'strategy12'
+    strategy13 = 'strategy13'
 
     email_recipient = 'wsx_dna@sina.com'
 
@@ -1757,7 +1853,7 @@ class DataContext:
         if DataContext.iscountryChina():
             DataContext.limitfordatafetched = 160
             DataContext.limitfordatafetched_30 = 160
-            DataContext.limitfordatafetched_60 = 160
+            DataContext.limitfordatafetched_60 = 320
             DataContext.limitfordatafetched_240 = 128
             DataContext.markets = ["科创板", "创业板", "中小企业板", "主板A股", "主板"]
             DataContext.marketopentime = datetime.time(hour=9, minute=30)
@@ -1937,7 +2033,8 @@ class DataContext:
                             DataContext.strategy6: {}, DataContext.strategy7: {},
                             DataContext.strategy103: {}, DataContext.strategy8: {},
                             DataContext.strategy104: {}, DataContext.strategy9: {},
-                            DataContext.strategy10: {}}
+                            DataContext.strategy10: {}, DataContext.strategy11: {},
+                            DataContext.strategy12: {}, DataContext.strategy13: {}}
         self.sectors = {}
 
         logger.debug("Initialization of context is done.")
@@ -2389,15 +2486,16 @@ def snapshot(context: DataContext):
                     logger.info("execute quantitative strategies successfully.")
                 context.queue.put(result)
                 logger.debug("send result to another thread to handle and sleep")
-                if closetime - current_time > datetime.timedelta(minutes=5):
-                    logger.debug("start to sleep with 3 minutes")
-                    # TODO: replace sleep() with threading.Timer()
-                    time.sleep(120)
-                    logger.debug("sleep is done with 2 minutes")
-                else:
-                    logger.debug("start to sleep with 45 seconds")
-                    time.sleep(45)
-                    logger.debug("sleep is done with 45 minutes")
+
+                logger.debug("start to sleep with 15 seconds")
+                # TODO: replace sleep() with threading.Timer()
+                time.sleep(30)
+                logger.debug("sleep is done with 15 seconds")
+                # if closetime - current_time > datetime.timedelta(minutes=5):
+                # else:
+                #     logger.debug("start to sleep with 45 seconds")
+                #     time.sleep(45)
+                #     logger.debug("sleep is done with 45 seconds")
             elif stock_data.ErrorCode != 0:
                 logger.debug("Request csqsnapshot Error error code is {}; error message is {}; codes is {}".
                              format(stock_data.ErrorCode, stock_data.ErrorMsg, stock_data.Codes))
@@ -2410,8 +2508,7 @@ def snapshot(context: DataContext):
                 time.sleep(30)
                 logger.debug("sleep of 30 is done due to error occurring during requesting csqsnapshot")
         elif (current_time - closetime) >= target_time:
-            # FIXME need to debug
-            # summarytotalresult(context)
+            summarytotalresult(context)
             logger.debug("market is closed so that snapshot quits")
             context.queue.put(ProcessStatus.STOP)
             print("time windows for 15 mins:")
@@ -2497,6 +2594,65 @@ def quantstrategies(context: DataContext):
             else:
                 logger.error("strategy_expma_cross_60 is failed on {}".format(symbol_tmp))
 
+            kd_60 = StrategyBasedOnKDAction(dataset_60)
+            valid_60_kd_cross, result_kd_cross_60 = kd_60. \
+                executeaction(occurrence_time=[dataset_60.index[-1]],
+                              operation='cross_up')
+            if valid_60_kd_cross:
+                if len(result_kd_cross_60) > 0:
+                    macd_cross_60 = StrategyBasedonMACDAction(dataset_60, 2)
+                    valid_60_macd_cross, result_macd_cross_60 = macd_cross_60.executeaction(operation='cross_up')
+                    if valid_60_macd_cross:
+                        if len(result_macd_cross_60) > 0:
+                            results[DataContext.strategy11] = result_macd_cross_60
+                            resultdata[symbol_tmp] = results
+                    else:
+                        logger.error("strategy_macd_cross_up_60 is failed on {}".format(symbol_tmp))
+            else:
+                logger.error("strategy_kd_cross_up_60 is failed on {}".format(symbol_tmp))
+
+            # FIXME
+            '''
+            valid_60_kd_deviate, result_kd_deviate_60 = kd_60. \
+                executeaction(occurrence_time=[dataset_60.index[-1]],
+                              operation='divergence_price_lower_and_k_higher')
+            if valid_60_kd_deviate:
+                if len(result_kd_deviate_60) > 0:
+                    results[DataContext.strategyx] = result_kd_deviate_60
+                    resultdata[symbol_tmp] = results
+            else:
+                logger.error("strategy_kd_deviate_60 is failed on {}".format(symbol_tmp))
+            '''
+
+            valid_60_kd_deviate, result_kd_deviate_60 = kd_60. \
+                executeaction(occurrence_time=[dataset_60.index[-1]],
+                              operation='divergence_price_lower_and_k_higher_simple',
+                              duration=20)
+            if valid_60_kd_deviate:
+                if len(result_kd_deviate_60) > 0:
+                    results[DataContext.strategy12] = result_kd_deviate_60
+                    resultdata[symbol_tmp] = results
+            else:
+                logger.error("strategy_kd_deviate_60 is failed on {}".format(symbol_tmp))
+
+            valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
+                kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                    operation='entangle_and_cross_up_within_period',
+                                    periods=4,
+                                    duration=40)
+            if valid_60_entangle_crossup_period:
+                if len(result_entangle_crossup_period_60) > 0:
+                    price_kavg_60 = StrategyBasedOnDayKAction(dataset_60)
+                    valid_60_price_ma, result_price_ma_60 = price_kavg_60.executeaction(operation='price_k_avg')
+                    if valid_60_price_ma:
+                        if len(result_price_ma_60) > 0:
+                            results[DataContext.strategy13] = result_price_ma_60
+                            resultdata[symbol_tmp] = results
+                    else:
+                        logger.error("strategy_price_ma_60 is failed on {}".format(symbol_tmp))
+            else:
+                logger.error("strategy_kd_cross_up_60 is failed on {}".format(symbol_tmp))
+
             ma_go_60 = StrategyBasedOnDayKAction(dataset_60)
             valid_60_ma, result_ma_60 = ma_go_60.executeaction(operation='avg_k_go')
             if valid_60_ma:
@@ -2521,7 +2677,7 @@ def quantstrategies(context: DataContext):
                 logger.error("strategy_expma_dif_go_60 is failed on {}".format(symbol_tmp))
                 continue
 
-            macd_go_60 = MACDGOUPAction(dataset_60, 2)
+            macd_go_60 = StrategyBasedonMACDAction(dataset_60, 2)
             ismacd_strcit = False
             ismacd_diff = False
             valid_60_macd_strict, result_macd_strict_60 = macd_go_60.executeaction(operation='strict')
@@ -2622,22 +2778,10 @@ def quantstrategies(context: DataContext):
                         resultdata[symbol_tmp] = results
                 else:
                     logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(symbol_tmp))
-            '''
 
-            kd_indicator_60 = KDAction(dataset_60, context.rsv_period, context.k_period, context.d_period)
-            valid_kd_60, k_v_60, d_v_60 = kd_indicator_60.executeaction()
-            if not valid_kd_60:
-                logger.error("all strategies based on period 60 are failed on {}".format(symbol_tmp))
-                continue
-
-            strategy_hourk = StrategyBasedOnKDAction(dataset_60)
-
-            '''
-            valid_60, result_tmp_60 = strategy_hourk.executeaction(occurrence_time=[dataset_60.index[-1]],
+            valid_60, result_tmp_60 = kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
                                                                    operation='cross_up',
-                                                                   crossvalue=(True, 30),
-                                                                   KValues=k_v_60,
-                                                                   DValues=d_v_60)
+                                                                   crossvalue=(True, 30))
             if valid_60:
                 if len(result_tmp_60) > 0:
                     results[DataContext.strategy2] = result_tmp_60
@@ -2645,12 +2789,10 @@ def quantstrategies(context: DataContext):
             else:
                 logger.error("strategy_cross_kd_60 is failed on {}".format(symbol_tmp))
 
-            valid_60_entangle, result_entangle_60 = strategy_hourk.executeaction(occurrence_time=[dataset_60.index[-1]],
+            valid_60_entangle, result_entangle_60 = kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
                                                                                  operation='entangle',
                                                                                  crossvalue=(True, 30),
-                                                                                 periods=4,
-                                                                                 KValues=k_v_60,
-                                                                                 DValues=d_v_60)
+                                                                                 periods=4)
             if valid_60_entangle:
                 if len(result_entangle_60) > 0:
                     results[DataContext.strategy3] = result_entangle_60
@@ -2660,13 +2802,10 @@ def quantstrategies(context: DataContext):
             '''
 
             valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
-                strategy_hourk.executeaction(occurrence_time=[dataset_60.index[-1]],
+                kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
                                              operation='entangle_and_cross_up_within_period',
-                                             crossvalue=(False, 0),
                                              periods=4,
-                                             duration=40,
-                                             KValues=k_v_60,
-                                             DValues=d_v_60)
+                                             duration=40)
 
             if valid_60_entangle_crossup_period:
                 if len(result_entangle_crossup_period_60) > 0:
@@ -2681,12 +2820,10 @@ def quantstrategies(context: DataContext):
             if not ismacd_strcit:
                 continue
 
-            valid_60_entangle_crossup, result_entangle_crossup_60 = strategy_hourk.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                                                                                 operation='entangle_and_cross_up',
-                                                                                                 crossvalue=(False, 30),
-                                                                                                 periods=4,
-                                                                                                 KValues=k_v_60,
-                                                                                                 DValues=d_v_60)
+            valid_60_entangle_crossup, result_entangle_crossup_60 =\
+                kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                             operation='entangle_and_cross_up',
+                                             periods=4)
             if valid_60_entangle_crossup:
                 if len(result_entangle_crossup_60) > 0:
                     results[DataContext.strategy4] = result_entangle_crossup_60
@@ -2798,6 +2935,22 @@ def summarytotalresult(context: DataContext):
                 str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                 str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                 str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
+            elif strategy_t == DataContext.strategy13:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略13 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  1. 股价在60分钟周期上20均线指标之下\r\n"
+                str101 += "  2. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
+                str101 += "  3. KD指标在60分钟周期形成金叉\r\n\r\n"
+            elif strategy_t == DataContext.strategy12:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略12 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  1. 当前K线值大于前五天的kd金叉的交叉点的5%\r\n"
+                str101 += "  1. 当前收盘价比前五天内的最低价再低1%\r\n"
+            elif strategy_t == DataContext.strategy11:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略11 - 预警条件为:\r\n"
+                str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                str101 += "  1. MACD指标在60分钟周期形成金叉\r\n"
+                str101 += "  2. KD指标在60分钟周期形成金叉\r\n"
             elif strategy_t == DataContext.strategy10:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略10 - 预警条件为:\r\n"
                 str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
@@ -2850,7 +3003,6 @@ def summarytotalresult(context: DataContext):
                 str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
                 str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
                 str101 += "  3. KD指标在30分钟周期形成金叉\r\n\r\n"
-                # FIXME
                 # str101 += "  4. OBV指标在30分钟周期大于零且大于30天均值\r\n\r\n"
             elif strategy_t == DataContext.strategy2:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略2 - 预警条件为:\r\n"
@@ -2864,21 +3016,18 @@ def summarytotalresult(context: DataContext):
                 str101 = "\r\n\r\n\r\n\r\n\r\n同时满足策略1和策略2的预警条件:\r\n\r\n"
             elif strategy_t == DataContext.strategy1_4:
                 str101 = "\r\n\r\n\r\n\r\n\r\n同时满足策略1和策略4的预警条件:\r\n\r\n"
-            file.write(str101)
-            e_content += str101
-            symbols_str = " ".join(symbols.keys())
-            file.write(symbols_str)
-            e_content += symbols_str
+            if str101 != "":
+                file.write(str101)
+                e_content += str101
+                symbols_str = " ".join(symbols.keys())
+                file.write(symbols_str)
+                e_content += symbols_str
     sendemail(e_subject, e_content, DataContext.email_recipient)
 
 
 # the function runs in a separate thread
 @time_measure
 def handleresult(context: DataContext):
-    # don't output a file including all of symbols and that can be imported by 365 as favor stocks
-    # until figure out blk file format
-    # simply output sector and symbol
-
     while True:
         resultfromq = context.queue.get()
         if isinstance(resultfromq, ProcessStatus) and resultfromq == ProcessStatus.STOP:
@@ -2906,7 +3055,6 @@ class CalcResult:
         self.isgreater_v = isvgreater
 
 
-# TODO remove duplicate item from totalreuslt
 def mergeresult(context: DataContext, result_transient, ishistory: bool = False):
     def assembleFunc(symbol, strategy: str):
         symbol_s = str(symbol)
@@ -2931,12 +3079,16 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     result_h_s8 = set(context.totalresult[DataContext.strategy8].keys())
     result_h_s9 = set(context.totalresult[DataContext.strategy9].keys())
     result_h_s10 = set(context.totalresult[DataContext.strategy10].keys())
+    result_h_s11 = set(context.totalresult[DataContext.strategy11].keys())
+    result_h_s12 = set(context.totalresult[DataContext.strategy12].keys())
+    result_h_s13 = set(context.totalresult[DataContext.strategy13].keys())
 
     keytime = datetime.datetime.now()
     symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: [], DataContext.strategy4: [],
                DataContext.strategy5: [], DataContext.strategy6: [], DataContext.strategy100: [], DataContext.strategy101: [],
                DataContext.strategy102: [], DataContext.strategy7: [], DataContext.strategy103: [], DataContext.strategy8: [],
-               DataContext.strategy104: [], DataContext.strategy9: [], DataContext.strategy10: []}
+               DataContext.strategy104: [], DataContext.strategy9: [], DataContext.strategy10: [], DataContext.strategy11: [],
+               DataContext.strategy12: [], DataContext.strategy13: []}
     global lock_qm
     with lock_qm:
         for time_result, result in result_transient.items():
@@ -2990,6 +3142,15 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
                         elif index_2 == DataContext.strategy10:
                             for row in value_2.itertuples(index=False):
                                 assembleFunc(index_1, DataContext.strategy10)
+                        elif index_2 == DataContext.strategy11:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy11)
+                        elif index_2 == DataContext.strategy12:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy12)
+                        elif index_2 == DataContext.strategy13:
+                            for row in value_2.itertuples(index=False):
+                                assembleFunc(index_1, DataContext.strategy13)
                         '''        
                         elif index_2 == DataContext.strategy6:
                             for row in value_2.itertuples(index=False):
@@ -3009,6 +3170,9 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     result_c_s8 = calcresult(DataContext.strategy8)
     result_c_s9 = calcresult(DataContext.strategy9)
     result_c_s10 = calcresult(DataContext.strategy10)
+    result_c_s11 = calcresult(DataContext.strategy11)
+    result_c_s12 = calcresult(DataContext.strategy12)
+    result_c_s13 = calcresult(DataContext.strategy13)
     # result_c_s6 = calcresult(DataContext.strategy6)
     # result_c_s1_2 = result_c_s1.intersection(result_c_s2).union(result_c_s1.intersection(result_h_s2))
     # result_h_s1_2 = result_h_s1.intersection(result_h_s2).union(result_h_s1.intersection(result_c_s2))
@@ -3030,7 +3194,10 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
                      DataContext.strategy2: [result_c_s2, result_h_s2],
                      # DataContext.strategy6: [result_c_s6, result_h_s6]}}
     '''
-    ret = {keytime: {DataContext.strategy8: [result_c_s8, result_h_s8],
+    ret = {keytime: {DataContext.strategy13: [result_c_s13, result_h_s13],
+                     DataContext.strategy12: [result_c_s12, result_h_s12],
+                     DataContext.strategy11: [result_c_s11, result_h_s11],
+                     DataContext.strategy8: [result_c_s8, result_h_s8],
                      DataContext.strategy10: [result_c_s10, result_h_s10],
                      DataContext.strategy9: [result_c_s9, result_h_s9],
                      DataContext.strategy7: [result_c_s7, result_h_s7],
@@ -3138,6 +3305,22 @@ def handleresultlocked(resultf, context: DataContext):
                     str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                     str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                     str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
+                elif strategy_t == DataContext.strategy13:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略13 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  1. 股价在60分钟周期上20均线指标之下\r\n"
+                    str101 += "  2. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
+                    str101 += "  3. KD指标在60分钟周期形成金叉\r\n\r\n"
+                elif strategy_t == DataContext.strategy12:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略12 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  1. 当前K线值大于前五天的kd金叉的交叉点的5%\r\n"
+                    str101 += "  1. 当前收盘价比前五天内的最低价再低1%\r\n"
+                elif strategy_t == DataContext.strategy11:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略11 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  1. MACD指标在60分钟周期形成金叉\r\n"
+                    str101 += "  2. KD指标在60分钟周期形成金叉\r\n"
                 elif strategy_t == DataContext.strategy10:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略10 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
@@ -3190,7 +3373,6 @@ def handleresultlocked(resultf, context: DataContext):
                     str101 += "  1. 收盘价在15分钟周期上穿70均线\r\n"
                     str101 += "  2. 成交量在15分钟周期大于80均线\r\n"
                     str101 += "  3. KD指标在30分钟周期形成金叉\r\n\r\n"
-                    # FIXME
                     # str101 += "  4. OBV指标在30分钟周期大于零且大于30天均值\r\n\r\n"
                 elif strategy_t == DataContext.strategy2:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略2 - 预警条件为:\r\n"
@@ -3451,9 +3633,9 @@ if __name__ == '__main__':
     '''
     login_em(isforcelogin=False)
     DataContext.initklz(CountryCode.CHINA)
-    updatedatabase(source=DataSource.EAST_MONEY)
+    # updatedatabase(source=DataSource.EAST_MONEY)
     # loadsectorsfromEM()
-    # reloaddata({})
+    reloaddata({})
     logout_em()
     '''
     # DataContext.country = CountryCode.US
