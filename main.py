@@ -1120,8 +1120,8 @@ def insertdata(exchange: str, group: str, symbols: list, retried, datasource: Da
                     freq = 15
                     stock_zh_df_tmp: pd.DataFrame = ef.stock.get_quote_history(
                         str(symbol_i), klt=freq,
-                        beg=(datetime.datetime.today() - datetime.timedelta(days=1)).strftime("%Y%m%d"),
-                        end=(datetime.datetime.today() - datetime.timedelta(days=1)).strftime("%Y%m%d"),
+                        beg=(datetime.datetime.today() - datetime.timedelta(days=0)).strftime("%Y%m%d"),
+                        end=(datetime.datetime.today() - datetime.timedelta(days=0)).strftime("%Y%m%d"),
                         fqt=0)
                 if isinstance(stock_zh_df_tmp, pd.DataFrame) and len(stock_zh_df_tmp) > 0:
                     update_database(exchange, symbol_i, stock_zh_df_tmp, datasource)
@@ -1637,10 +1637,16 @@ class StrategyBasedonMACDAction(ActionBase):
                     count += 1
                     cursor -= 1
             elif operation == 'cross_up':
-                diff, dea, macd = MACD(self._data.close.values)
-                tmp_ret = CROSS(diff, dea)
-                if tmp_ret[-2] or not tmp_ret[-1]:
+                try:
+                    diff, dea, macd = MACD(self._data.close.values)
+                    tmp_ret = CROSS(diff, dea)
+                    if tmp_ret[-2] or not tmp_ret[-1]:
+                        ret_valid_int = False
+                except BaseException as be:
+                    logger.error("MACD is failed", be)
+                    ret_valid = False
                     ret_valid_int = False
+
             else:
                 ret_valid = False
                 ret_valid_int = False
@@ -1955,7 +1961,11 @@ class StrategyBasedOnKDAction(ActionBase):
                 return False
         else:
             return False
-        min_low_duration_v = LLV(l_v, duration)
+        try:
+            min_low_duration_v = LLV(l_v, duration)
+        except BaseException as be:
+            logger.error("LLV is failed", be)
+            return False
         cross_v = CROSS(k_v, d_v)
         if len(k_v) < duration or len(d_v) < duration:
             return False
@@ -2003,8 +2013,12 @@ class StrategyBasedOnKDAction(ActionBase):
             # FIXME
             # kd_indicator = KDAction(self._data, rsv_p, k_p, d_p)
             # valid, k_v, d_v = kd_indicator.executeaction()
-            valid = True
-            k_v, d_v, j_v = KDJ(self._data.close.values, self._data.high.values, self._data.low.values)
+            try:
+                k_v, d_v, j_v = KDJ(self._data.close.values, self._data.high.values, self._data.low.values)
+                valid = True
+            except BaseException as be:
+                logger.error("The KDJ is failed", be)
+                valid = False
         if valid:
             for time_stamp in occurrences:
                 if operation == 'cross_up':
@@ -2261,14 +2275,18 @@ class EXPMACrossAction(ActionBase):
         if len(self._data.close) < 2:
             ret_valid = False
             return ret_valid, ret_value
-        expma_12, expma_50 = EXPMA(self._data.close.values)
-        tmp_ret = CROSS(expma_12, expma_50)
-        if tmp_ret[-2] == 0 and tmp_ret[-1] == 1:
-            time_stamp = self._data.index[-1]
-            row = self._data.loc[time_stamp]
-            ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
-                                             row['high'], row['low'], row['volume'],
-                                             time_stamp, True]
+        try:
+            expma_12, expma_50 = EXPMA(self._data.close.values)
+            tmp_ret = CROSS(expma_12, expma_50)
+            if tmp_ret[-2] == 0 and tmp_ret[-1] == 1:
+                time_stamp = self._data.index[-1]
+                row = self._data.loc[time_stamp]
+                ret_value.loc[len(ret_value)] = [row['gid'], row['open'], row['close'],
+                                                 row['high'], row['low'], row['volume'],
+                                                 time_stamp, True]
+        except BaseException as be:
+            logger.error("The EXPMA is failed", be)
+            ret_valid = False
 
         return ret_valid, ret_value
 
@@ -2623,64 +2641,69 @@ def snapshot(context: DataContext):
                 index_s = ".".join(tmp_index_list)
                 sector_code = stock_group[sector_usd]
                 if index_s in context.symbols_exchange[sector_code]:
-                    if DataContext.iscountryChina():
-                        symbol_idx = index_s[:-3]
-                    elif DataContext.iscountryUS():
-                        symbol_idx = index_s[:-2]
-                    tmpdata = context.data15mins[sector_code].get(symbol_idx)
-                    tmpdata_30 = context.data30mins[sector_code].get(symbol_idx)
-                    tmpdata_60 = context.data60mins[sector_code].get(symbol_idx)
-                    tmpdata_240 = context.data240mins[sector_code].get(symbol_idx)
-                    row = stockdata.loc[index]
-                    # create a new row based on the period of 15 mins and it represent the next period because it is the
-                    # beginning of the next period so that it is needed to use next record time as index
-                    if isnewrow:
-                        record_time = getrecordtime(15)
-                        if isfirstk_15:
-                            volume_cur = row['VOLUME']
-                        else:
-                            sum_v = sumvolume(barcounter_15 - 1, -1, tmpdata)
-                            volume_cur = row['VOLUME'] - sum_v
-                        tmpdata.loc[pd.Timestamp(record_time)] = [symbol_idx, row['NOW'], row['NOW'], row['NOW'],
-                                                                  row['NOW'], volume_cur]
-
-                        record_time = getrecordtime(30)
-                        if isfirstK_30:
-                            tmpdata_30.loc[pd.Timestamp(record_time)] = [symbol_idx, row['NOW'], row['NOW'],
-                                                                         row['NOW'], row['NOW'], row['VOLUME']]
-                        else:
-                            if (roundresult_15 % 2) == 0:
-                                sum_v = sumvolume(barcounter_30 - 1, -1, tmpdata_30)
+                    try:
+                        if DataContext.iscountryChina():
+                            symbol_idx = index_s[:-3]
+                        elif DataContext.iscountryUS():
+                            symbol_idx = index_s[:-2]
+                        tmpdata = context.data15mins[sector_code].get(symbol_idx)
+                        tmpdata_30 = context.data30mins[sector_code].get(symbol_idx)
+                        tmpdata_60 = context.data60mins[sector_code].get(symbol_idx)
+                        tmpdata_240 = context.data240mins[sector_code].get(symbol_idx)
+                        row = stockdata.loc[index]
+                        # create a new row based on the period of 15 mins and it represent the next period because it is the
+                        # beginning of the next period so that it is needed to use next record time as index
+                        if isnewrow:
+                            record_time = getrecordtime(15)
+                            if isfirstk_15:
+                                volume_cur = row['VOLUME']
+                            else:
+                                sum_v = sumvolume(barcounter_15 - 1, -1, tmpdata)
                                 volume_cur = row['VOLUME'] - sum_v
+                            tmpdata.loc[pd.Timestamp(record_time)] = [symbol_idx, row['NOW'], row['NOW'], row['NOW'],
+                                                                      row['NOW'], volume_cur]
+
+                            record_time = getrecordtime(30)
+                            if isfirstK_30:
                                 tmpdata_30.loc[pd.Timestamp(record_time)] = [symbol_idx, row['NOW'], row['NOW'],
-                                                                             row['NOW'], row['NOW'], volume_cur]
+                                                                             row['NOW'], row['NOW'], row['VOLUME']]
                             else:
-                                updateexistingrow(isfirstK_30, barcounter_30, tmpdata_30)
+                                if (roundresult_15 % 2) == 0:
+                                    sum_v = sumvolume(barcounter_30 - 1, -1, tmpdata_30)
+                                    volume_cur = row['VOLUME'] - sum_v
+                                    tmpdata_30.loc[pd.Timestamp(record_time)] = [symbol_idx, row['NOW'], row['NOW'],
+                                                                                 row['NOW'], row['NOW'], volume_cur]
+                                else:
+                                    updateexistingrow(isfirstK_30, barcounter_30, tmpdata_30)
 
-                        record_time = getrecordtime(60)
-                        if isfirstK_60:
-                            tmpdata_60.loc[pd.Timestamp(record_time)] = [symbol_idx, row['NOW'], row['NOW'],
-                                                                         row['NOW'], row['NOW'], row['VOLUME']]
-                        else:
-                            if (roundresult_15 % 4) == 0:
-                                sum_v = sumvolume(barcounter_60 - 1, -1, tmpdata_60)
-                                volume_cur = row['VOLUME'] - sum_v
+                            record_time = getrecordtime(60)
+                            if isfirstK_60:
                                 tmpdata_60.loc[pd.Timestamp(record_time)] = [symbol_idx, row['NOW'], row['NOW'],
-                                                                             row['NOW'], row['NOW'], volume_cur]
+                                                                             row['NOW'], row['NOW'], row['VOLUME']]
                             else:
-                                updateexistingrow(isfirstK_60, barcounter_60, tmpdata_60)
+                                if (roundresult_15 % 4) == 0:
+                                    sum_v = sumvolume(barcounter_60 - 1, -1, tmpdata_60)
+                                    volume_cur = row['VOLUME'] - sum_v
+                                    tmpdata_60.loc[pd.Timestamp(record_time)] = [symbol_idx, row['NOW'], row['NOW'],
+                                                                                 row['NOW'], row['NOW'], volume_cur]
+                                else:
+                                    updateexistingrow(isfirstK_60, barcounter_60, tmpdata_60)
 
-                        if isfirstK_240:
-                            tmpdata_240.loc[pd.Timestamp(current_date)] = [symbol_idx, row['OPEN'], row['NOW'], row['HIGH'],
-                                                                           row['LOW'], row['VOLUME']]
+                            if isfirstK_240:
+                                tmpdata_240.loc[pd.Timestamp(current_date)] = [symbol_idx, row['OPEN'], row['NOW'],
+                                                                               row['HIGH'],
+                                                                               row['LOW'], row['VOLUME']]
+                            else:
+                                updateexistingrow(isfirstK_240, -1, tmpdata_240, True)
+
                         else:
+                            updateexistingrow(isfirstk_15, barcounter_15, tmpdata)
+                            updateexistingrow(isfirstK_30, barcounter_30, tmpdata_30)
+                            updateexistingrow(isfirstK_60, barcounter_60, tmpdata_60)
                             updateexistingrow(isfirstK_240, -1, tmpdata_240, True)
-
-                    else:
-                        updateexistingrow(isfirstk_15, barcounter_15, tmpdata)
-                        updateexistingrow(isfirstK_30, barcounter_30, tmpdata_30)
-                        updateexistingrow(isfirstK_60, barcounter_60, tmpdata_60)
-                        updateexistingrow(isfirstK_240, -1, tmpdata_240, True)
+                    except BaseException as be:
+                        logger.debug("It is failed to update context data, symbol is {}".format(symbol_idx))
+                        logger.error("It is failed to update context data", be)
                     break
 
     # FIXME because EM has been obsoleted.
@@ -2702,6 +2725,7 @@ def snapshot(context: DataContext):
                 except Exception as ee:
                     logger.error("It is failed to execute quantitative strategies. error >>>", ee)
                     traceback.print_exc()
+                    result = {}
                 else:
                     logger.info("execute quantitative strategies successfully.")
                 context.queue.put(result)
@@ -2766,322 +2790,332 @@ def quantstrategies(context: DataContext):
         sector_tmp = stock_group[sector_usd]
         for symbol_tmp in context.symbols[sector_tmp]:
             results = {}
-            with lock_qm:
-                length_totalresult100 = len(transientresult100)
-                issymbolintotalresult100 = symbol_tmp in transientresult100
+            try:
+                runStrategies(transientresult100, symbol_tmp, sector_tmp,
+                              context, resultdata, results)
+            except BaseException as be:
+                logger.debug("runStrategies is failed, symbol is {}".format(symbol_tmp))
+                logger.error("runStrategies is failed, symbol is {}".format(symbol_tmp), be)
+        totalresultdata[sector_tmp] = resultdata
+    return totalresultdata
 
-            if length_totalresult100 > 0:
-                if not issymbolintotalresult100:
-                    continue
+
+def runStrategies(transientresult100, symbol_tmp, sector_tmp, context,
+                  resultdata, results):
+    with lock_qm:
+        length_totalresult100 = len(transientresult100)
+        issymbolintotalresult100 = symbol_tmp in transientresult100
+
+    if length_totalresult100 > 0:
+        if not issymbolintotalresult100:
+            return False
+    else:
+        dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
+        if len(dataset_240) == 0:
+            return False
+        strategy_dayk = StrategyBasedOnDayKAction(dataset_240)
+        valid_240_amplitude, result_amplitude_240 = strategy_dayk.executeaction(operation='amplitude_avg')
+        if valid_240_amplitude:
+            if len(result_amplitude_240) > 0:
+                results[DataContext.strategy100] = result_amplitude_240
+                resultdata[symbol_tmp] = results
             else:
-                dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
-                if len(dataset_240) == 0:
-                    continue
-                strategy_dayk = StrategyBasedOnDayKAction(dataset_240)
-                valid_240_amplitude, result_amplitude_240 = strategy_dayk.executeaction(operation='amplitude_avg')
-                if valid_240_amplitude:
-                    if len(result_amplitude_240) > 0:
-                        results[DataContext.strategy100] = result_amplitude_240
-                        resultdata[symbol_tmp] = results
-                    else:
-                        continue
-                else:
-                    logger.error("strategy_amplitude_avg_240 is failed on {}".format(symbol_tmp))
-                    continue
+                return False
+        else:
+            logger.error("strategy_amplitude_avg_240 is failed on {}".format(symbol_tmp))
+            return False
 
-            dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
-            expma_cross_240 = EXPMACrossAction(dataset_240)
-            valid_expma_240, value_240_expma = expma_cross_240.executeaction()
-            if valid_expma_240:
-                if len(value_240_expma) > 0:
-                    results[DataContext.strategy8] = value_240_expma
+    dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
+    expma_cross_240 = EXPMACrossAction(dataset_240)
+    valid_expma_240, value_240_expma = expma_cross_240.executeaction()
+    if valid_expma_240:
+        if len(value_240_expma) > 0:
+            results[DataContext.strategy8] = value_240_expma
+            resultdata[symbol_tmp] = results
+    else:
+        logger.error("strategy_expma_cross_240 is failed on {}".format(symbol_tmp))
+
+    dataset_30 = context.data30mins[sector_tmp].get(symbol_tmp)
+    expma_cross_30 = EXPMACrossAction(dataset_30)
+    valid_expma_30, value_30_expma = expma_cross_30.executeaction()
+    if valid_expma_30:
+        if len(value_30_expma) > 0:
+            results[DataContext.strategy9] = value_30_expma
+            resultdata[symbol_tmp] = results
+    else:
+        logger.error("strategy_expma_cross_30 is failed on {}".format(symbol_tmp))
+
+    dataset_60 = context.data60mins[sector_tmp].get(symbol_tmp)
+    if len(dataset_60) == 0:
+        return False
+
+    expma_cross_60 = EXPMACrossAction(dataset_60)
+    valid_expma_60, value_60_expma = expma_cross_60.executeaction()
+    if valid_expma_60:
+        if len(value_60_expma) > 0:
+            results[DataContext.strategy10] = value_60_expma
+            resultdata[symbol_tmp] = results
+    else:
+        logger.error("strategy_expma_cross_60 is failed on {}".format(symbol_tmp))
+
+    kd_60 = StrategyBasedOnKDAction(dataset_60)
+    valid_60_kd_cross, result_kd_cross_60 = kd_60. \
+        executeaction(occurrence_time=[dataset_60.index[-1]],
+                      operation='cross_up')
+    if valid_60_kd_cross:
+        if len(result_kd_cross_60) > 0:
+            macd_cross_60 = StrategyBasedonMACDAction(dataset_60, 2)
+            valid_60_macd_cross, result_macd_cross_60 = macd_cross_60.executeaction(operation='cross_up')
+            if valid_60_macd_cross:
+                if len(result_macd_cross_60) > 0:
+                    results[DataContext.strategy11] = result_macd_cross_60
                     resultdata[symbol_tmp] = results
             else:
-                logger.error("strategy_expma_cross_240 is failed on {}".format(symbol_tmp))
+                logger.error("strategy_macd_cross_up_60 is failed on {}".format(symbol_tmp))
+    else:
+        logger.error("strategy_kd_cross_up_60 is failed on {}".format(symbol_tmp))
 
-            dataset_30 = context.data30mins[sector_tmp].get(symbol_tmp)
-            expma_cross_30 = EXPMACrossAction(dataset_30)
-            valid_expma_30, value_30_expma = expma_cross_30.executeaction()
-            if valid_expma_30:
-                if len(value_30_expma) > 0:
-                    results[DataContext.strategy9] = value_30_expma
+    # FIXME
+    '''
+    valid_60_kd_deviate, result_kd_deviate_60 = kd_60. \
+        executeaction(occurrence_time=[dataset_60.index[-1]],
+                      operation='divergence_price_lower_and_k_higher')
+    if valid_60_kd_deviate:
+        if len(result_kd_deviate_60) > 0:
+            results[DataContext.strategyx] = result_kd_deviate_60
+            resultdata[symbol_tmp] = results
+    else:
+        logger.error("strategy_kd_deviate_60 is failed on {}".format(symbol_tmp))
+    '''
+
+    valid_60_kd_deviate, result_kd_deviate_60 = kd_60. \
+        executeaction(occurrence_time=[dataset_60.index[-1]],
+                      operation='divergence_price_lower_and_k_higher_simple',
+                      duration=20)
+    if valid_60_kd_deviate:
+        if len(result_kd_deviate_60) > 0:
+            results[DataContext.strategy12] = result_kd_deviate_60
+            resultdata[symbol_tmp] = results
+    else:
+        logger.error("strategy_kd_deviate_60 is failed on {}".format(symbol_tmp))
+
+    price_kavg_60 = StrategyBasedOnDayKAction(dataset_60)
+    valid_60_price_ma, result_price_ma_60 = price_kavg_60.executeaction(operation='price_k_avg')
+    if valid_60_price_ma:
+        if len(result_price_ma_60) > 0:
+            valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
+                kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                    operation='entangle_and_cross_up_within_period',
+                                    periods=4,
+                                    duration=40)
+            if valid_60_entangle_crossup_period:
+                if len(result_entangle_crossup_period_60) > 0:
+                    results[DataContext.strategy13] = result_entangle_crossup_period_60
                     resultdata[symbol_tmp] = results
             else:
-                logger.error("strategy_expma_cross_30 is failed on {}".format(symbol_tmp))
+                logger.error("strategy_kd_entangle_and_cross_up_60 is failed on {}".format(symbol_tmp))
 
-            dataset_60 = context.data60mins[sector_tmp].get(symbol_tmp)
-            if len(dataset_60) == 0:
-                continue
-
-            expma_cross_60 = EXPMACrossAction(dataset_60)
-            valid_expma_60, value_60_expma = expma_cross_60.executeaction()
-            if valid_expma_60:
-                if len(value_60_expma) > 0:
-                    results[DataContext.strategy10] = value_60_expma
-                    resultdata[symbol_tmp] = results
-            else:
-                logger.error("strategy_expma_cross_60 is failed on {}".format(symbol_tmp))
-
-            kd_60 = StrategyBasedOnKDAction(dataset_60)
-            valid_60_kd_cross, result_kd_cross_60 = kd_60. \
-                executeaction(occurrence_time=[dataset_60.index[-1]],
-                              operation='cross_up')
-            if valid_60_kd_cross:
-                if len(result_kd_cross_60) > 0:
-                    macd_cross_60 = StrategyBasedonMACDAction(dataset_60, 2)
-                    valid_60_macd_cross, result_macd_cross_60 = macd_cross_60.executeaction(operation='cross_up')
-                    if valid_60_macd_cross:
-                        if len(result_macd_cross_60) > 0:
-                            results[DataContext.strategy11] = result_macd_cross_60
+            valid_60_entangle_period, result_entangle_period_60 = \
+                kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                    operation='entangle_within_period',
+                                    periods=4,
+                                    duration=40)
+            if valid_60_entangle_period:
+                if len(result_entangle_period_60) > 0:
+                    valid_30_crossup, result_crossup_30 = \
+                        StrategyBasedOnKDAction(dataset_30).executeaction(
+                            occurrence_time=[dataset_30.index[-1]],
+                            operation='cross_up')
+                    if valid_30_crossup:
+                        if len(result_crossup_30) > 0:
+                            results[DataContext.strategy14] = result_crossup_30
                             resultdata[symbol_tmp] = results
                     else:
-                        logger.error("strategy_macd_cross_up_60 is failed on {}".format(symbol_tmp))
+                        logger.error("strategy_kd_cross_up_30 is failed on {}".format(symbol_tmp))
             else:
-                logger.error("strategy_kd_cross_up_60 is failed on {}".format(symbol_tmp))
+                logger.error("strategy_kd_entangle_60 is failed on {}".format(symbol_tmp))
+    else:
+        logger.error("strategy_price_ma_60 is failed on {}".format(symbol_tmp))
 
-            # FIXME
-            '''
-            valid_60_kd_deviate, result_kd_deviate_60 = kd_60. \
-                executeaction(occurrence_time=[dataset_60.index[-1]],
-                              operation='divergence_price_lower_and_k_higher')
-            if valid_60_kd_deviate:
-                if len(result_kd_deviate_60) > 0:
-                    results[DataContext.strategyx] = result_kd_deviate_60
-                    resultdata[symbol_tmp] = results
-            else:
-                logger.error("strategy_kd_deviate_60 is failed on {}".format(symbol_tmp))
-            '''
+    ma_go_60 = StrategyBasedOnDayKAction(dataset_60)
+    valid_60_ma, result_ma_60 = ma_go_60.executeaction(operation='avg_k_go')
+    if valid_60_ma:
+        if len(result_ma_60) > 0:
+            results[DataContext.strategy102] = result_ma_60
+            resultdata[symbol_tmp] = results
+        else:
+            return False
+    else:
+        logger.error("strategy_ma_avg_60 is failed on {}".format(symbol_tmp))
+        return False
 
-            valid_60_kd_deviate, result_kd_deviate_60 = kd_60. \
-                executeaction(occurrence_time=[dataset_60.index[-1]],
-                              operation='divergence_price_lower_and_k_higher_simple',
-                              duration=20)
-            if valid_60_kd_deviate:
-                if len(result_kd_deviate_60) > 0:
-                    results[DataContext.strategy12] = result_kd_deviate_60
-                    resultdata[symbol_tmp] = results
-            else:
-                logger.error("strategy_kd_deviate_60 is failed on {}".format(symbol_tmp))
+    expma_go_60 = StrategyBasedOnDayKAction(dataset_60)
+    valid_60_expema_dif, result_expema_dif_60 = expma_go_60.executeaction(operation='expma_dif_go')
+    if valid_60_expema_dif:
+        if len(result_expema_dif_60) > 0:
+            results[DataContext.strategy104] = result_expema_dif_60
+            resultdata[symbol_tmp] = results
+        else:
+            return False
+    else:
+        logger.error("strategy_expma_dif_go_60 is failed on {}".format(symbol_tmp))
+        return False
 
-            price_kavg_60 = StrategyBasedOnDayKAction(dataset_60)
-            valid_60_price_ma, result_price_ma_60 = price_kavg_60.executeaction(operation='price_k_avg')
-            if valid_60_price_ma:
-                if len(result_price_ma_60) > 0:
-                    valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
-                        kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                            operation='entangle_and_cross_up_within_period',
-                                            periods=4,
-                                            duration=40)
-                    if valid_60_entangle_crossup_period:
-                        if len(result_entangle_crossup_period_60) > 0:
-                            results[DataContext.strategy13] = result_entangle_crossup_period_60
-                            resultdata[symbol_tmp] = results
-                    else:
-                        logger.error("strategy_kd_entangle_and_cross_up_60 is failed on {}".format(symbol_tmp))
+    macd_go_60 = StrategyBasedonMACDAction(dataset_60, 2)
+    ismacd_strcit = False
+    ismacd_diff = False
+    valid_60_macd_strict, result_macd_strict_60 = macd_go_60.executeaction(operation='strict')
+    if valid_60_macd_strict:
+        if len(result_macd_strict_60) > 0:
+            results[DataContext.strategy101] = result_macd_strict_60
+            resultdata[symbol_tmp] = results
+            ismacd_strcit = True
+    else:
+        logger.error("strategy_macd_strict_60 is failed on {}".format(symbol_tmp))
 
-                    valid_60_entangle_period, result_entangle_period_60 = \
-                        kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                            operation='entangle_within_period',
-                                            periods=4,
-                                            duration=40)
-                    if valid_60_entangle_period:
-                        if len(result_entangle_period_60) > 0:
-                            valid_30_crossup, result_crossup_30 = \
-                                StrategyBasedOnKDAction(dataset_30).executeaction(
-                                            occurrence_time=[dataset_30.index[-1]],
-                                            operation='cross_up')
-                            if valid_30_crossup:
-                                if len(result_crossup_30) > 0:
-                                    results[DataContext.strategy14] = result_crossup_30
-                                    resultdata[symbol_tmp] = results
-                            else:
-                                logger.error("strategy_kd_cross_up_30 is failed on {}".format(symbol_tmp))
-                    else:
-                        logger.error("strategy_kd_entangle_60 is failed on {}".format(symbol_tmp))
-            else:
-                logger.error("strategy_price_ma_60 is failed on {}".format(symbol_tmp))
+    if not ismacd_strcit:
+        valid_60_macd_dif, result_macd_dif_60 = macd_go_60.executeaction(operation='dif')
+        if valid_60_macd_dif:
+            if len(result_macd_dif_60) > 0:
+                results[DataContext.strategy103] = result_macd_dif_60
+                resultdata[symbol_tmp] = results
+                ismacd_diff = True
+        else:
+            logger.error("strategy_macd_diff_60 is failed on {}".format(symbol_tmp))
 
-            ma_go_60 = StrategyBasedOnDayKAction(dataset_60)
-            valid_60_ma, result_ma_60 = ma_go_60.executeaction(operation='avg_k_go')
-            if valid_60_ma:
-                if len(result_ma_60) > 0:
-                    results[DataContext.strategy102] = result_ma_60
-                    resultdata[symbol_tmp] = results
+    if not ismacd_strcit and not ismacd_diff:
+        return False
+
+    '''
+    dataset_30 = context.data30mins[sector_tmp].get(symbol_tmp)
+    kd_cross_30 = StrategyBasedOnKDAction(dataset_30)
+    kd_indicator_30 = KDAction(dataset_30, context.rsv_period, context.k_period, context.d_period)
+    valid_kd_30, k_v_30, d_v_30 = kd_indicator_30.executeaction()
+    ma_cross = CROSSUpMAAction(context.data15mins[sector_tmp].get(symbol_tmp))
+    valid, result_tmp = ma_cross.executeaction(startindex=context.start_i, endindex=context.end_i,
+                                                cross_period=context.cross_sma_period,
+                                                greater_period=context.greater_than_sma_period)
+    if valid:
+        if len(result_tmp) > 0:
+            time_sequence = []
+            for time_stamp_original in result_tmp['time'].array:
+                tmp_date = datetime.date(year=time_stamp_original.year, month=time_stamp_original.month,
+                                         day=time_stamp_original.day)
+                if time_stamp_original.minute == 0:
+                    time_stamp = time_stamp_original
+                elif time_stamp_original.minute <= 30:
+                    time_stamp = pd.Timestamp(datetime.datetime.combine(tmp_date,
+                                                                        datetime.time(
+                                                                            hour=time_stamp_original.hour,
+                                                                            minute=30)))
                 else:
-                    continue
+                    time_stamp = pd.Timestamp(datetime.datetime.combine(tmp_date,
+                                                                        datetime.time(
+                                                                            hour=time_stamp_original.hour + 1)))
+                time_sequence.append(time_stamp)
+
+            if not valid_kd_30:
+                logger.error("strategy_cross_kd_30 is failed on {}".format(symbol_tmp))
             else:
-                logger.error("strategy_ma_avg_60 is failed on {}".format(symbol_tmp))
-                continue
+                valid, result_tmp = kd_cross_30.executeaction(occurrence_time=time_sequence,
+                                                              operation='cross_up',
+                                                              KValues=k_v_30,
+                                                              DValues=d_v_30,
+                                                              crossvalue=(False, 0))
+                if valid:
+                    # FIXME
 
-            expma_go_60 = StrategyBasedOnDayKAction(dataset_60)
-            valid_60_expema_dif, result_expema_dif_60 = expma_go_60.executeaction(operation='expma_dif_go')
-            if valid_60_expema_dif:
-                if len(result_expema_dif_60) > 0:
-                    results[DataContext.strategy104] = result_expema_dif_60
-                    resultdata[symbol_tmp] = results
-                else:
-                    continue
-            else:
-                logger.error("strategy_expma_dif_go_60 is failed on {}".format(symbol_tmp))
-                continue
-
-            macd_go_60 = StrategyBasedonMACDAction(dataset_60, 2)
-            ismacd_strcit = False
-            ismacd_diff = False
-            valid_60_macd_strict, result_macd_strict_60 = macd_go_60.executeaction(operation='strict')
-            if valid_60_macd_strict:
-                if len(result_macd_strict_60) > 0:
-                    results[DataContext.strategy101] = result_macd_strict_60
-                    resultdata[symbol_tmp] = results
-                    ismacd_strcit = True
-            else:
-                logger.error("strategy_macd_strict_60 is failed on {}".format(symbol_tmp))
-
-            if not ismacd_strcit:
-                valid_60_macd_dif, result_macd_dif_60 = macd_go_60.executeaction(operation='dif')
-                if valid_60_macd_dif:
-                    if len(result_macd_dif_60) > 0:
-                        results[DataContext.strategy103] = result_macd_dif_60
-                        resultdata[symbol_tmp] = results
-                        ismacd_diff = True
-                else:
-                    logger.error("strategy_macd_diff_60 is failed on {}".format(symbol_tmp))
-
-            if not ismacd_strcit and not ismacd_diff:
-                continue
-
-            '''
-            dataset_30 = context.data30mins[sector_tmp].get(symbol_tmp)
-            kd_cross_30 = StrategyBasedOnKDAction(dataset_30)
-            kd_indicator_30 = KDAction(dataset_30, context.rsv_period, context.k_period, context.d_period)
-            valid_kd_30, k_v_30, d_v_30 = kd_indicator_30.executeaction()
-            ma_cross = CROSSUpMAAction(context.data15mins[sector_tmp].get(symbol_tmp))
-            valid, result_tmp = ma_cross.executeaction(startindex=context.start_i, endindex=context.end_i,
-                                                        cross_period=context.cross_sma_period,
-                                                        greater_period=context.greater_than_sma_period)
-            if valid:
-                if len(result_tmp) > 0:
-                    time_sequence = []
-                    for time_stamp_original in result_tmp['time'].array:
-                        tmp_date = datetime.date(year=time_stamp_original.year, month=time_stamp_original.month,
-                                                 day=time_stamp_original.day)
-                        if time_stamp_original.minute == 0:
-                            time_stamp = time_stamp_original
-                        elif time_stamp_original.minute <= 30:
-                            time_stamp = pd.Timestamp(datetime.datetime.combine(tmp_date,
-                                                                                datetime.time(
-                                                                                    hour=time_stamp_original.hour,
-                                                                                    minute=30)))
-                        else:
-                            time_stamp = pd.Timestamp(datetime.datetime.combine(tmp_date,
-                                                                                datetime.time(
-                                                                                    hour=time_stamp_original.hour + 1)))
-                        time_sequence.append(time_stamp)
-
-                    if not valid_kd_30:
-                        logger.error("strategy_cross_kd_30 is failed on {}".format(symbol_tmp))
-                    else:
-                        valid, result_tmp = kd_cross_30.executeaction(occurrence_time=time_sequence,
-                                                                      operation='cross_up',
-                                                                      KValues=k_v_30,
-                                                                      DValues=d_v_30,
-                                                                      crossvalue=(False, 0))
+                    if len(result_tmp) > 0:
+                        obv_up = OBVUpACTION(context.data30mins[sector_tmp].get(symbol_tmp))
+                        valid, result_tmp = obv_up.executeaction(occurrence_time=result_tmp['time'],
+                                                                 obv_period=context.obv_period,
+                                                                 obv_a_period=context.obv_a_period)
                         if valid:
-                            # FIXME
-
-                            if len(result_tmp) > 0:
-                                obv_up = OBVUpACTION(context.data30mins[sector_tmp].get(symbol_tmp))
-                                valid, result_tmp = obv_up.executeaction(occurrence_time=result_tmp['time'],
-                                                                         obv_period=context.obv_period,
-                                                                         obv_a_period=context.obv_a_period)
-                                if valid:
-                                    if len(result_tmp) > 0:
-                                        results[DataContext.strategy1] = result_tmp
-                                        resultdata[symbol_tmp] = results
-                                else:
-                                    logger.error("strategy_obv_up_30 is failed on {}".format(symbol_tmp))
-
                             if len(result_tmp) > 0:
                                 results[DataContext.strategy1] = result_tmp
                                 resultdata[symbol_tmp] = results
                         else:
-                            logger.error("strategy_cross_kd_30 is failed on {}".format(symbol_tmp))
-            else:
-                logger.error("strategy_cross_70 is failed on {}".format(symbol_tmp))
+                            logger.error("strategy_obv_up_30 is failed on {}".format(symbol_tmp))
 
-            if not valid_kd_30:
-                logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(symbol_tmp))
-            else:
-                valid_30_entangle_crossup_period, result_entangle_crossup_period_30 = \
-                    kd_cross_30.executeaction(occurrence_time=[dataset_30.index[-1]],
-                                              operation='entangle_and_cross_up_within_period',
-                                              KValues=k_v_30,
-                                              DValues=d_v_30,
-                                              periods=4,
-                                              duration=80,
-                                              crossvalue=(False, 0))
-                if valid_30_entangle_crossup_period:
-                    if len(result_entangle_crossup_period_30) > 0:
-                        results[DataContext.strategy6] = result_entangle_crossup_period_30
+                    if len(result_tmp) > 0:
+                        results[DataContext.strategy1] = result_tmp
                         resultdata[symbol_tmp] = results
                 else:
-                    logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(symbol_tmp))
+                    logger.error("strategy_cross_kd_30 is failed on {}".format(symbol_tmp))
+    else:
+        logger.error("strategy_cross_70 is failed on {}".format(symbol_tmp))
 
-            valid_60, result_tmp_60 = kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                                                   operation='cross_up',
-                                                                   crossvalue=(True, 30))
-            if valid_60:
-                if len(result_tmp_60) > 0:
-                    results[DataContext.strategy2] = result_tmp_60
-                    resultdata[symbol_tmp] = results
-            else:
-                logger.error("strategy_cross_kd_60 is failed on {}".format(symbol_tmp))
+    if not valid_kd_30:
+        logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(symbol_tmp))
+    else:
+        valid_30_entangle_crossup_period, result_entangle_crossup_period_30 = \
+            kd_cross_30.executeaction(occurrence_time=[dataset_30.index[-1]],
+                                      operation='entangle_and_cross_up_within_period',
+                                      KValues=k_v_30,
+                                      DValues=d_v_30,
+                                      periods=4,
+                                      duration=80,
+                                      crossvalue=(False, 0))
+        if valid_30_entangle_crossup_period:
+            if len(result_entangle_crossup_period_30) > 0:
+                results[DataContext.strategy6] = result_entangle_crossup_period_30
+                resultdata[symbol_tmp] = results
+        else:
+            logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(symbol_tmp))
 
-            valid_60_entangle, result_entangle_60 = kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                                                                 operation='entangle',
-                                                                                 crossvalue=(True, 30),
-                                                                                 periods=4)
-            if valid_60_entangle:
-                if len(result_entangle_60) > 0:
-                    results[DataContext.strategy3] = result_entangle_60
-                    resultdata[symbol_tmp] = results
-            else:
-                logger.error("strategy_entangle_kd_60 is failed on {}".format(symbol_tmp))
-            '''
+    valid_60, result_tmp_60 = kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                                           operation='cross_up',
+                                                           crossvalue=(True, 30))
+    if valid_60:
+        if len(result_tmp_60) > 0:
+            results[DataContext.strategy2] = result_tmp_60
+            resultdata[symbol_tmp] = results
+    else:
+        logger.error("strategy_cross_kd_60 is failed on {}".format(symbol_tmp))
 
-            valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
-                kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                             operation='entangle_and_cross_up_within_period',
-                                             periods=4,
-                                             duration=40)
+    valid_60_entangle, result_entangle_60 = kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                                                         operation='entangle',
+                                                                         crossvalue=(True, 30),
+                                                                         periods=4)
+    if valid_60_entangle:
+        if len(result_entangle_60) > 0:
+            results[DataContext.strategy3] = result_entangle_60
+            resultdata[symbol_tmp] = results
+    else:
+        logger.error("strategy_entangle_kd_60 is failed on {}".format(symbol_tmp))
+    '''
 
-            if valid_60_entangle_crossup_period:
-                if len(result_entangle_crossup_period_60) > 0:
-                    if ismacd_diff:
-                        results[DataContext.strategy7] = result_entangle_crossup_period_60
-                    elif ismacd_strcit:
-                        results[DataContext.strategy5] = result_entangle_crossup_period_60
-                    resultdata[symbol_tmp] = results
-            else:
-                logger.error("strategy_entangle_crossup_period_kd_60 is failed on {}".format(symbol_tmp))
+    valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
+        kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                            operation='entangle_and_cross_up_within_period',
+                            periods=4,
+                            duration=40)
 
-            if not ismacd_strcit:
-                continue
+    if valid_60_entangle_crossup_period:
+        if len(result_entangle_crossup_period_60) > 0:
+            if ismacd_diff:
+                results[DataContext.strategy7] = result_entangle_crossup_period_60
+            elif ismacd_strcit:
+                results[DataContext.strategy5] = result_entangle_crossup_period_60
+            resultdata[symbol_tmp] = results
+    else:
+        logger.error("strategy_entangle_crossup_period_kd_60 is failed on {}".format(symbol_tmp))
 
-            valid_60_entangle_crossup, result_entangle_crossup_60 =\
-                kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                             operation='entangle_and_cross_up',
-                                             periods=4)
-            if valid_60_entangle_crossup:
-                if len(result_entangle_crossup_60) > 0:
-                    results[DataContext.strategy4] = result_entangle_crossup_60
-                    resultdata[symbol_tmp] = results
-            else:
-                logger.error("strategy_entangle_crossup_kd_60 is failed on {}".format(symbol_tmp))
+    if not ismacd_strcit:
+        return False
 
-        totalresultdata[sector_tmp] = resultdata
-    return totalresultdata
+    valid_60_entangle_crossup, result_entangle_crossup_60 = \
+        kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                            operation='entangle_and_cross_up',
+                            periods=4)
+    if valid_60_entangle_crossup:
+        if len(result_entangle_crossup_60) > 0:
+            results[DataContext.strategy4] = result_entangle_crossup_60
+            resultdata[symbol_tmp] = results
+    else:
+        logger.error("strategy_entangle_crossup_kd_60 is failed on {}".format(symbol_tmp))
 
+    return True
 
 # FIXME because EM has been obsoleted.
 def calcrankofchange():
@@ -3889,7 +3923,7 @@ def backtest(context: DataContext):
 
 
 if __name__ == '__main__':
-    # ["科创板", "创业板", "中小企业板", "主板A股", "主板"]
+    # ["创业板", "中小企业板", "主板A股", "主板", "科创板"]
     # DataContext.initklz(CountryCode.CHINA)
     # loaddata(["主板A股"], 2, datasource=DataSource.AK_SHARE)
     # loaddata(["主板A股"], 3, c_point=600216, datasource=DataSource.AK_SHARE)
@@ -3907,7 +3941,7 @@ if __name__ == '__main__':
     '''
     DataContext.initklz(CountryCode.CHINA)
     # updatedatabase(source=DataSource.EFINANCE)
-    loaddata(["科创板"], 3, c_point=688399, datasource=DataSource.EFINANCE)
+    loaddata(["科创板"], 2, datasource=DataSource.EFINANCE)
     '''
     # DataContext.country = CountryCode.CHINA
     # checksymbols()
