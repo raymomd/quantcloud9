@@ -17,7 +17,6 @@ import sys
 import threading
 from queue import Queue
 from email.message import EmailMessage
-from email.mime.text import MIMEText
 import smtplib
 from MyTT import *
 import efinance as ef
@@ -81,6 +80,7 @@ exchanges = {"中小企业板": 'sz',
              "科创板": 'sh',
              "主板A股": 'sh'}
 
+
 class DataContext:
     country = CountryCode.NONE
     limitfordatafetched = 0
@@ -116,10 +116,16 @@ class DataContext:
     strategy12 = 'strategy12'
     strategy13 = 'strategy13'
     strategy14 = 'strategy14'
-
+    strategy20 = 'strategy20'
+    strategy21 = 'strategy21'
+    
+    email_sender = 'wsx_dna@163.com'
+    email_pwd = "IUCDQHTSWBWKQOPT"
     email_recipient = 'wsx_dna@sina.com'
     email_other1_recipient = 'stocash2021@163.com'
     email_other2_recipient = 'Li_hewei@126.com'
+    smtp_address = "smtp.163.com"
+    smtp_port = 465
 
     code_spotlighted = [7171, 2901, 300571, 2634, 300771, 603871, 603165, 603755, 2950, 688178,
                         603506, 603757, 537, 600167, 300765, 603327, 603360, 300738, 688026, 300800,
@@ -136,6 +142,8 @@ class DataContext:
                         300706, 300333, 603005, 2371, 300493, 600667, 300661, 688123, 300548, 600360,
                         603806, 600517, 875, 601908, 601222, 601012, 601615, 603218, 27, 600008,
                         688599, 300185, 300850, 400, 300815, 625, 2266, 601877, 881]
+
+    is_first_time_to_run = True
 
     @classmethod
     def initklz(cls, country_param: CountryCode):
@@ -319,13 +327,12 @@ class DataContext:
                             DataContext.strategy5: {}, DataContext.strategy100: {},
                             DataContext.strategy4: {}, DataContext.strategy1: {},
                             DataContext.strategy2: {}, DataContext.strategy3: {},
-                            DataContext.strategy101: {}, DataContext.strategy102: {},
                             DataContext.strategy6: {}, DataContext.strategy7: {},
-                            DataContext.strategy103: {}, DataContext.strategy8: {},
-                            DataContext.strategy104: {}, DataContext.strategy9: {},
+                            DataContext.strategy8: {}, DataContext.strategy9: {},
                             DataContext.strategy10: {}, DataContext.strategy11: {},
                             DataContext.strategy12: {}, DataContext.strategy13: {},
-                            DataContext.strategy14: {}}
+                            DataContext.strategy14: {}, DataContext.strategy20: {},
+                            DataContext.strategy21: {}}
         self.sectors = {}
 
         logger.debug("Initialization of context is done.")
@@ -1778,26 +1785,39 @@ class StrategyBasedOnKDAction(ActionBase):
     def __init__(self, data: pd.DataFrame):
         super().__init__(data)
 
-    def crossupaction(self, time_stamp, k_v, d_v, c_v):
+    def crossupaction(self, time_stamp, k_v, d_v, c_v, is_twice_crossup_supported=False, cross_twice_period=0):
         index_c = self.getindex(time_stamp)
         if index_c is None:
             return False
-        index_p = index_c - 1
         length = len(self._data.index)
+        index_p = index_c - 1
         if index_c >= length or index_c < 0 or index_p >= length or index_p < 0:
             return False
+        
+        ret = False
+        cross_v = CROSS(k_v, d_v)
         k_c_v = k_v[index_c]
         d_c_v = d_v[index_c]
         k_p_v = k_v[index_p]
         d_p_v = d_v[index_p]
-        if k_p_v < d_p_v and k_c_v > d_c_v:
+        if not cross_v[index_p] and cross_v[index_c]:
             if c_v[0]:
                 if not (k_c_v > c_v[1] and k_p_v > c_v[1]) and not (d_c_v > c_v[1] and d_p_v > c_v[1]):
-                    return True
+                    ret = True
             else:
-                return True
+                ret = True
+            if is_twice_crossup_supported and ret:
+                i = index_p - 1
+                while i > -1:
+                    index_pre = i - 1
+                    if index_pre > -1 and not cross_v[index_pre] and cross_v[i] and \
+                            index_c - index_pre < cross_twice_period - 1:
+                        break
+                    i -= 2
+                else:
+                    ret = False
+        return ret
 
-        return False
 
     def entangleaction(self, time_stamp, periods, k_v, d_v, c_v):
         def comparevalue():
@@ -1998,6 +2018,7 @@ class StrategyBasedOnKDAction(ActionBase):
         c_v = kwargs.get('crossvalue', (False, 0))
         periods = kwargs.get('periods', 1)
         duration = kwargs.get('duration', 40)
+        cross_twice_period = kwargs.get('cross_twice_period', 60)
         rsv_p = kwargs.get('rsv_period', 9)
         k_p = kwargs.get('k_period', 3)
         d_p = kwargs.get('d_period', 3)
@@ -2010,9 +2031,6 @@ class StrategyBasedOnKDAction(ActionBase):
             k_v = k_v_o
             d_v = d_v_o
         else:
-            # FIXME
-            # kd_indicator = KDAction(self._data, rsv_p, k_p, d_p)
-            # valid, k_v, d_v = kd_indicator.executeaction()
             try:
                 k_v, d_v, j_v = KDJ(self._data.close.values, self._data.high.values, self._data.low.values)
                 valid = True
@@ -2041,6 +2059,9 @@ class StrategyBasedOnKDAction(ActionBase):
                         locdata()
                 elif operation == 'divergence_price_lower_and_k_higher_simple':
                     if self.deviate_price_k_s_action(time_stamp, duration, k_v, d_v):
+                        locdata()
+                elif operation == 'cross_up_twice':
+                    if self.crossupaction(time_stamp, k_v, d_v, c_v, True, cross_twice_period):
                         locdata()
                 else:
                     logger.error("%s is not supported!" % operation)
@@ -2537,8 +2558,13 @@ def snapshot(context: DataContext):
 
     def updatestockdata(stockdata: pd.DataFrame, isnewrow: bool = False, datasource = DataSource.EFINANCE):
         def getrecordtime(period: int):
-            if (current_time - closetime) >= target_time or (opentime - current_time) >= target_time:
+            if (current_time - closetime) >= target_time:
                 return datetime.datetime.combine(current_date, datetime.time(hour=15))
+            elif (opentime - current_time) >= target_time:
+                return datetime.datetime.combine(current_date - datetime.timedelta(days=1),
+                                                 datetime.time(hour=15))
+            elif (current_time - breakstarttime) >= target_time and (breakstoptime - current_time) >= target_time:
+                return datetime.datetime.combine(current_date, datetime.time(hour=11, minute=30))
             if period == 15 or period == 30:
                 slot = current_time.minute // period + 1
                 if slot == 60 // period:
@@ -2641,6 +2667,9 @@ def snapshot(context: DataContext):
                 index_s = ".".join(tmp_index_list)
                 sector_code = stock_group[sector_usd]
                 if index_s in context.symbols_exchange[sector_code]:
+                    # FIXME: convert object or str to numeric for each missing data
+                    # FIXME: dynamically adjust list of stock symbols in order to skip
+                    #  stock that doesn't have data today
                     try:
                         if DataContext.iscountryChina():
                             symbol_idx = index_s[:-3]
@@ -2715,11 +2744,11 @@ def snapshot(context: DataContext):
                 or ((current_time - breakstoptime) >= target_time and (closetime - current_time) >= target_time))
         elif DataContext.iscountryUS():
             timecondition = (((current_time - opentime) >= target_time) and ((closetime - current_time) >= target_time))
-
+        
         if timecondition:
             if update_stock_data_in_context():
                 # 3) calculate indicators
-                logger.debug("run 9 strategies")
+                logger.debug("run 12 strategies")
                 try:
                     result = {current_time: quantstrategies(context)}
                 except Exception as ee:
@@ -2774,348 +2803,738 @@ def snapshot(context: DataContext):
             time.sleep(10)
 
 
-lock_qm = threading.Lock()
 queue_history_data = Queue()
 failed_to_get_data_symbols = []
 
 
-# TODO refactor below codes with command-chain pattern
-@time_measure
-def quantstrategies(context: DataContext):
-    global lock_qm
-    totalresultdata = {}
-    transientresult100 = context.totalresult[DataContext.strategy100]
-    for sector_usd in context.markets:
-        resultdata = {}
-        sector_tmp = stock_group[sector_usd]
-        for symbol_tmp in context.symbols[sector_tmp]:
-            results = {}
-            try:
-                runStrategies(transientresult100, symbol_tmp, sector_tmp,
-                              context, resultdata, results)
-            except BaseException as be:
-                logger.debug("runStrategies is failed, symbol is {}".format(symbol_tmp))
-                logger.error("runStrategies is failed, symbol is {}".format(symbol_tmp), be)
-        totalresultdata[sector_tmp] = resultdata
-    return totalresultdata
+class CompositeStrategyBase:
+    def __init__(self, data_context: DataContext):
+        self._data_context = data_context
+
+    @abstractmethod
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        pass
 
 
-def runStrategies(transientresult100, symbol_tmp, sector_tmp, context,
-                  resultdata, results):
-    with lock_qm:
-        length_totalresult100 = len(transientresult100)
-        issymbolintotalresult100 = symbol_tmp in transientresult100
-
-    if length_totalresult100 > 0:
-        if not issymbolintotalresult100:
-            return False
-    else:
-        dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
-        if len(dataset_240) == 0:
-            return False
-        strategy_dayk = StrategyBasedOnDayKAction(dataset_240)
-        valid_240_amplitude, result_amplitude_240 = strategy_dayk.executeaction(operation='amplitude_avg')
-        if valid_240_amplitude:
-            if len(result_amplitude_240) > 0:
-                results[DataContext.strategy100] = result_amplitude_240
-                resultdata[symbol_tmp] = results
-            else:
+# 前五日价格振幅平均值大于等于3%     (填充strategy100由merge函数实现)
+class Strategy100(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+        
+    def execute_action(self, stock_sector, stock_symbol, result=None) -> bool:
+        transientresult100 = self._data_context.totalresult[DataContext.strategy100]
+    
+        if not DataContext.is_first_time_to_run:
+            if stock_symbol not in transientresult100:
                 return False
         else:
-            logger.error("strategy_amplitude_avg_240 is failed on {}".format(symbol_tmp))
+            dataset_240 = self._data_context.data240mins[stock_sector].get(stock_symbol)
+            if len(dataset_240) == 0:
+                return False
+            strategy_dayk = StrategyBasedOnDayKAction(dataset_240)
+            valid_240_amplitude, result_amplitude_240 = strategy_dayk.executeaction(operation='amplitude_avg')
+            if valid_240_amplitude:
+                if len(result_amplitude_240) > 0:
+                    append_value(self._data_context.totalresult[DataContext.strategy100], stock_symbol, CalcResult())
+                else:
+                    return False
+            else:
+                logger.error("strategy_amplitude_avg_240 is failed on {}".format(stock_symbol))
+                return False
+        return True
+
+
+# MACD指标在60分钟周期上当前向上且快线大于慢线
+class Strategy101(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result=None) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
             return False
-
-    dataset_240 = context.data240mins[sector_tmp].get(symbol_tmp)
-    expma_cross_240 = EXPMACrossAction(dataset_240)
-    valid_expma_240, value_240_expma = expma_cross_240.executeaction()
-    if valid_expma_240:
-        if len(value_240_expma) > 0:
-            results[DataContext.strategy8] = value_240_expma
-            resultdata[symbol_tmp] = results
-    else:
-        logger.error("strategy_expma_cross_240 is failed on {}".format(symbol_tmp))
-
-    dataset_30 = context.data30mins[sector_tmp].get(symbol_tmp)
-    expma_cross_30 = EXPMACrossAction(dataset_30)
-    valid_expma_30, value_30_expma = expma_cross_30.executeaction()
-    if valid_expma_30:
-        if len(value_30_expma) > 0:
-            results[DataContext.strategy9] = value_30_expma
-            resultdata[symbol_tmp] = results
-    else:
-        logger.error("strategy_expma_cross_30 is failed on {}".format(symbol_tmp))
-
-    dataset_60 = context.data60mins[sector_tmp].get(symbol_tmp)
-    if len(dataset_60) == 0:
+        macd_go_60 = StrategyBasedonMACDAction(dataset_60, 2)
+        valid_60_macd_strict, result_macd_strict_60 = macd_go_60.executeaction(operation='strict')
+        if valid_60_macd_strict:
+            if len(result_macd_strict_60) > 0:
+                return True
+        else:
+            logger.error("strategy_macd_strict_60 is failed on {}".format(stock_symbol))
+    
         return False
 
-    expma_cross_60 = EXPMACrossAction(dataset_60)
-    valid_expma_60, value_60_expma = expma_cross_60.executeaction()
-    if valid_expma_60:
-        if len(value_60_expma) > 0:
-            results[DataContext.strategy10] = value_60_expma
-            resultdata[symbol_tmp] = results
-    else:
-        logger.error("strategy_expma_cross_60 is failed on {}".format(symbol_tmp))
 
-    kd_60 = StrategyBasedOnKDAction(dataset_60)
-    valid_60_kd_cross, result_kd_cross_60 = kd_60. \
-        executeaction(occurrence_time=[dataset_60.index[-1]],
-                      operation='cross_up')
-    if valid_60_kd_cross:
-        if len(result_kd_cross_60) > 0:
-            macd_cross_60 = StrategyBasedonMACDAction(dataset_60, 2)
-            valid_60_macd_cross, result_macd_cross_60 = macd_cross_60.executeaction(operation='cross_up')
-            if valid_60_macd_cross:
-                if len(result_macd_cross_60) > 0:
-                    results[DataContext.strategy11] = result_macd_cross_60
-                    resultdata[symbol_tmp] = results
+# 20均线指标在60分钟周期上当前向上
+# EXPMA指标在60分钟周期上快线当前向上
+class Strategy102(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result=None) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        ma_go_60 = StrategyBasedOnDayKAction(dataset_60)
+        valid_60_ma, result_ma_60 = ma_go_60.executeaction(operation='avg_k_go')
+        if valid_60_ma:
+            if len(result_ma_60) == 0:
+                return False
+        else:
+            logger.error("strategy_ma_avg_60 is failed on {}".format(stock_symbol))
+            return False
+    
+        expma_go_60 = StrategyBasedOnDayKAction(dataset_60)
+        valid_60_expema_dif, result_expema_dif_60 = expma_go_60.executeaction(operation='expma_dif_go')
+        if valid_60_expema_dif:
+            if len(result_expema_dif_60) == 0:
+                return False
+        else:
+            logger.error("strategy_expma_dif_go_60 is failed on {}".format(stock_symbol))
+            return False
+        
+        return True
+
+
+# MACD指标在60分钟周期上快线当前向上
+class Strategy103(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result=None) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        macd_go_60 = StrategyBasedonMACDAction(dataset_60, 2)
+        valid_60_macd_dif, result_macd_dif_60 = macd_go_60.executeaction(operation='dif')
+        if valid_60_macd_dif:
+            if len(result_macd_dif_60) > 0:
+                return True
+        else:
+            logger.error("strategy_macd_diff_60 is failed on {}".format(stock_symbol))
+        
+        return False
+
+
+# 1. 股价在60分钟周期上20均线指标之下
+# 2. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠
+class Strategy104(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+    
+    def execute_action(self, stock_sector, stock_symbol, result=None) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        price_kavg_60 = StrategyBasedOnDayKAction(dataset_60)
+        valid_60_price_ma, result_price_ma_60 = price_kavg_60.executeaction(operation='price_k_avg')
+        if valid_60_price_ma:
+            if len(result_price_ma_60) > 0:
+                kd_60 = StrategyBasedOnKDAction(dataset_60)
+                valid_60_entangle_period, result_entangle_period_60 = \
+                    kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                        operation='entangle_within_period',
+                                        periods=4,
+                                        duration=40)
+                if valid_60_entangle_period:
+                    if len(result_entangle_period_60) > 0:
+                        return True
+                else:
+                    logger.error("strategy_kd_entangle_60 is failed on {}".format(stock_symbol))
+        else:
+            logger.error("strategy_price_ma_60 is failed on {}".format(stock_symbol))
+    
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. MACD指标在60分钟周期上当前向上且快线大于慢线
+# 0. 20均线指标在60分钟周期上当前向上
+# 0. EXPMA指标在60分钟周期上快线当前向上
+# 1. 收盘价在15分钟周期上穿70均线
+# 2. 成交量在15分钟周期大于80均线              (在merge函数中实现)
+# 3. KD指标在30分钟周期形成金叉
+class Strategy1(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_30 = self._data_context.data30mins[stock_sector].get(stock_symbol)
+        dataset_15 = self._data_context.data15mins[stock_sector].get(stock_symbol)
+        if len(dataset_30) == 0 or len(dataset_15) == 0:
+            return False
+        kd_cross_30 = StrategyBasedOnKDAction(dataset_30)
+        kd_indicator_30 = KDAction(dataset_30, self._data_context.rsv_period, self._data_context.k_period,
+                                   self._data_context.d_period)
+        valid_kd_30, k_v_30, d_v_30 = kd_indicator_30.executeaction()
+        ma_cross = CROSSUpMAAction(dataset_15)
+        valid, result_tmp = ma_cross.executeaction(startindex=self._data_context.start_i,
+                                                   endindex=self._data_context.end_i,
+                                                   cross_period=self._data_context.cross_sma_period,
+                                                   greater_period=self._data_context.greater_than_sma_period)
+        if valid:
+            if len(result_tmp) > 0:
+                time_sequence = []
+                for time_stamp_original in result_tmp['time'].array:
+                    tmp_date = datetime.date(year=time_stamp_original.year, month=time_stamp_original.month,
+                                             day=time_stamp_original.day)
+                    if time_stamp_original.minute == 0:
+                        time_stamp = time_stamp_original
+                    elif time_stamp_original.minute <= 30:
+                        time_stamp = pd.Timestamp(datetime.datetime.combine(tmp_date,
+                                                                            datetime.time(
+                                                                                hour=time_stamp_original.hour,
+                                                                                minute=30)))
+                    else:
+                        time_stamp = pd.Timestamp(datetime.datetime.combine(tmp_date,
+                                                                            datetime.time(
+                                                                                hour=time_stamp_original.hour + 1)))
+                    time_sequence.append(time_stamp)
+            
+                if not valid_kd_30:
+                    logger.error("strategy_cross_kd_30 is failed on {}".format(stock_symbol))
+                else:
+                    valid, result_tmp = kd_cross_30.executeaction(occurrence_time=time_sequence,
+                                                                  operation='cross_up',
+                                                                  KValues=k_v_30,
+                                                                  DValues=d_v_30,
+                                                                  crossvalue=(False, 0))
+                    if valid:
+                        if len(result_tmp) > 0:
+                            result[DataContext.strategy1] = result_tmp
+                            return True
+                    else:
+                        logger.error("strategy_cross_kd_30 is failed on {}".format(stock_symbol))
+        else:
+            logger.error("strategy_cross_70 is failed on {}".format(stock_symbol))
+        
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. MACD指标在60分钟周期上当前向上且快线大于慢线
+# 0. 20均线指标在60分钟周期上当前向上
+# 0. EXPMA指标在60分钟周期上快线当前向上
+# 1. 收盘价在60分钟周期不大于50                 (在merge函数中实现)
+# 2. KD指标在60分钟周期形成金叉且金叉小于30
+class Strategy2(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        kd_60 = StrategyBasedOnKDAction(dataset_60)
+        valid_60, result_tmp_60 = kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                                      operation='cross_up',
+                                                      crossvalue=(True, 30))
+        if valid_60:
+            if len(result_tmp_60) > 0:
+                result[DataContext.strategy2] = result_tmp_60
+                return True
+        else:
+            logger.error("strategy_cross_kd_60 is failed on {}".format(stock_symbol))
+        
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. MACD指标在60分钟周期上当前向上且快线大于慢线
+# 0. 20均线指标在60分钟周期上当前向上
+# 0. EXPMA指标在60分钟周期上快线当前向上
+# 1. KD指标在60分钟周期至少持续纠缠4个周期且小于30
+class Strategy3(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        kd_60 = StrategyBasedOnKDAction(dataset_60)
+        valid_60_entangle, result_entangle_60 = kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                                                    operation='entangle',
+                                                                    crossvalue=(True, 30),
+                                                                    periods=4)
+        if valid_60_entangle:
+            if len(result_entangle_60) > 0:
+                result[DataContext.strategy3] = result_entangle_60
+                return True
+        else:
+            logger.error("strategy_entangle_kd_60 is failed on {}".format(stock_symbol))
+        
+        return False
+    
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. MACD指标在60分钟周期上当前向上且快线大于慢线
+# 0. 20均线指标在60分钟周期上当前向上
+# 0. EXPMA指标在60分钟周期上快线当前向上
+# 1. KD指标在60分钟周期至少持续纠缠4个周期
+# 2. KD指标在60分钟周期形成金叉
+class Strategy4(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        kd_60 = StrategyBasedOnKDAction(dataset_60)
+        valid_60_entangle_crossup, result_entangle_crossup_60 = \
+            kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                operation='entangle_and_cross_up',
+                                periods=4)
+        if valid_60_entangle_crossup:
+            if len(result_entangle_crossup_60) > 0:
+                result[DataContext.strategy4] = result_entangle_crossup_60
+                return True
+        else:
+            logger.error("strategy_entangle_crossup_kd_60 is failed on {}".format(stock_symbol))
+        
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. MACD指标在60分钟周期上当前向上且快线大于慢线
+# 0. 20均线指标在60分钟周期上当前向上
+# 0. EXPMA指标在60分钟周期上快线当前向上
+# 1. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠
+# 2. KD指标在60分钟周期形成金叉
+class Strategy5(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        kd_60 = StrategyBasedOnKDAction(dataset_60)
+        valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
+            kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                operation='entangle_and_cross_up_within_period',
+                                periods=4,
+                                duration=40)
+    
+        if valid_60_entangle_crossup_period:
+            if len(result_entangle_crossup_period_60) > 0:
+                result[DataContext.strategy5] = result_entangle_crossup_period_60
+                return True
+        else:
+            logger.error("strategy_entangle_crossup_period_kd_60 is failed on {}".format(stock_symbol))
+        
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. MACD指标在60分钟周期上当前向上且快线大于慢线
+# 0. 20均线指标在60分钟周期上当前向上
+# 0. EXPMA指标在60分钟周期上快线当前向上
+# 1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠
+# 2. KD指标在30分钟周期形成金叉
+class Strategy6(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_30 = self._data_context.data30mins[stock_sector].get(stock_symbol)
+        if len(dataset_30) == 0:
+            return False
+        kd_cross_30 = StrategyBasedOnKDAction(dataset_30)
+        kd_indicator_30 = KDAction(dataset_30,
+                                   self._data_context.rsv_period,
+                                   self._data_context.k_period,
+                                   self._data_context.d_period)
+        valid_kd_30, k_v_30, d_v_30 = kd_indicator_30.executeaction()
+        if not valid_kd_30:
+            valid_30_entangle_crossup_period, result_entangle_crossup_period_30 = \
+                kd_cross_30.executeaction(occurrence_time=[dataset_30.index[-1]],
+                                          operation='entangle_and_cross_up_within_period',
+                                          KValues=k_v_30,
+                                          DValues=d_v_30,
+                                          periods=4,
+                                          duration=80,
+                                          crossvalue=(False, 0))
+            if valid_30_entangle_crossup_period:
+                if len(result_entangle_crossup_period_30) > 0:
+                    result[DataContext.strategy6] = result_entangle_crossup_period_30
+                    return True
             else:
-                logger.error("strategy_macd_cross_up_60 is failed on {}".format(symbol_tmp))
-    else:
-        logger.error("strategy_kd_cross_up_60 is failed on {}".format(symbol_tmp))
+                logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(stock_symbol))
+        else:
+            logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(stock_symbol))
 
-    # FIXME
-    '''
-    valid_60_kd_deviate, result_kd_deviate_60 = kd_60. \
-        executeaction(occurrence_time=[dataset_60.index[-1]],
-                      operation='divergence_price_lower_and_k_higher')
-    if valid_60_kd_deviate:
-        if len(result_kd_deviate_60) > 0:
-            results[DataContext.strategyx] = result_kd_deviate_60
-            resultdata[symbol_tmp] = results
-    else:
-        logger.error("strategy_kd_deviate_60 is failed on {}".format(symbol_tmp))
-    '''
+        return False
 
-    valid_60_kd_deviate, result_kd_deviate_60 = kd_60. \
-        executeaction(occurrence_time=[dataset_60.index[-1]],
-                      operation='divergence_price_lower_and_k_higher_simple',
-                      duration=20)
-    if valid_60_kd_deviate:
-        if len(result_kd_deviate_60) > 0:
-            results[DataContext.strategy12] = result_kd_deviate_60
-            resultdata[symbol_tmp] = results
-    else:
-        logger.error("strategy_kd_deviate_60 is failed on {}".format(symbol_tmp))
 
-    price_kavg_60 = StrategyBasedOnDayKAction(dataset_60)
-    valid_60_price_ma, result_price_ma_60 = price_kavg_60.executeaction(operation='price_k_avg')
-    if valid_60_price_ma:
-        if len(result_price_ma_60) > 0:
-            valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
-                kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                    operation='entangle_and_cross_up_within_period',
-                                    periods=4,
-                                    duration=40)
-            if valid_60_entangle_crossup_period:
-                if len(result_entangle_crossup_period_60) > 0:
-                    results[DataContext.strategy13] = result_entangle_crossup_period_60
-                    resultdata[symbol_tmp] = results
-            else:
-                logger.error("strategy_kd_entangle_and_cross_up_60 is failed on {}".format(symbol_tmp))
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. MACD指标在60分钟周期上快线当前向上
+# 0. 20均线指标在60分钟周期上当前向上
+# 0. EXPMA指标在60分钟周期上快线当前向上
+# 1. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠
+# 2. KD指标在60分钟周期形成金叉
+class Strategy7(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
 
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        kd_60 = StrategyBasedOnKDAction(dataset_60)
+        valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
+            kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
+                                operation='entangle_and_cross_up_within_period',
+                                periods=4,
+                                duration=40)
+    
+        if valid_60_entangle_crossup_period:
+            if len(result_entangle_crossup_period_60) > 0:
+                result[DataContext.strategy7] = result_entangle_crossup_period_60
+                return True
+                
+        else:
+            logger.error("strategy_entangle_crossup_period_kd_60 is failed on {}".format(stock_symbol))
+        
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 1. EXPMA指标在日线周期形成金叉
+class Strategy8(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+    
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_240 = self._data_context.data240mins[stock_sector].get(stock_symbol)
+        if len(dataset_240) == 0:
+            return False
+        expma_cross_240 = EXPMACrossAction(dataset_240)
+        valid_expma_240, value_240_expma = expma_cross_240.executeaction()
+        if valid_expma_240:
+            if len(value_240_expma) > 0:
+                result[DataContext.strategy8] = value_240_expma
+                return True
+        else:
+            logger.error("strategy_expma_cross_240 is failed on {}".format(stock_symbol))
+
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 1. EXPMA指标在30分钟周期形成金叉
+class Strategy9(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+        
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_30 = self._data_context.data30mins[stock_sector].get(stock_symbol)
+        if len(dataset_30) == 0:
+            return False
+        expma_cross_30 = EXPMACrossAction(dataset_30)
+        valid_expma_30, value_30_expma = expma_cross_30.executeaction()
+        if valid_expma_30:
+            if len(value_30_expma) > 0:
+                result[DataContext.strategy9] = value_30_expma
+                return True
+        else:
+            logger.error("strategy_expma_cross_30 is failed on {}".format(stock_symbol))
+        
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 1. EXPMA指标在60分钟周期形成金叉
+class Strategy10(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+    
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        expma_cross_60 = EXPMACrossAction(dataset_60)
+        valid_expma_60, value_60_expma = expma_cross_60.executeaction()
+        if valid_expma_60:
+            if len(value_60_expma) > 0:
+                result[DataContext.strategy10] = value_60_expma
+                return True
+        else:
+            logger.error("strategy_expma_cross_60 is failed on {}".format(stock_symbol))
+        
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 1. MACD指标在60分钟周期形成金叉
+# 2. KD指标在60分钟周期形成金叉
+class Strategy11(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+    
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        kd_60 = StrategyBasedOnKDAction(dataset_60)
+        valid_60_kd_cross, result_kd_cross_60 = kd_60. \
+            executeaction(occurrence_time=[dataset_60.index[-1]],
+                          operation='cross_up')
+        if valid_60_kd_cross:
+            if len(result_kd_cross_60) > 0:
+                macd_cross_60 = StrategyBasedonMACDAction(dataset_60, 2)
+                valid_60_macd_cross, result_macd_cross_60 = macd_cross_60.executeaction(operation='cross_up')
+                if valid_60_macd_cross:
+                    if len(result_macd_cross_60) > 0:
+                        result[DataContext.strategy11] = result_macd_cross_60
+                        return True
+                else:
+                    logger.error("strategy_macd_cross_up_60 is failed on {}".format(stock_symbol))
+        else:
+            logger.error("strategy_kd_cross_up_60 is failed on {}".format(stock_symbol))
+
+        return False
+    
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 1. 当前K线值大于前五天的kd金叉的交叉点的5%
+# 2. 当前收盘价比前五天内的最低价再低1%
+class Strategy12(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+    
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        kd_60 = StrategyBasedOnKDAction(dataset_60)
+        valid_60_kd_deviate, result_kd_deviate_60 = kd_60. \
+            executeaction(occurrence_time=[dataset_60.index[-1]],
+                          operation='divergence_price_lower_and_k_higher_simple',
+                          duration=20)
+        if valid_60_kd_deviate:
+            if len(result_kd_deviate_60) > 0:
+                result[DataContext.strategy12] = result_kd_deviate_60
+                return True
+        else:
+            logger.error("strategy_kd_deviate_60 is failed on {}".format(stock_symbol))
+
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. 股价在60分钟周期上20均线指标之下
+# 0. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠
+# 1. KD指标在60分钟周期形成金叉
+class Strategy13(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+    
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_60) == 0:
+            return False
+        valid_60_crossup, result_crossup_60 = \
+            StrategyBasedOnKDAction(dataset_60).executeaction(
+                occurrence_time=[dataset_60.index[-1]], operation='cross_up')
+        if valid_60_crossup:
+            if len(result_crossup_60) > 0:
+                result[DataContext.strategy13] = result_crossup_60
+                return True
+        else:
+            logger.error("strategy_kd_cross_up_60 is failed on {}".format(stock_symbol))
+    
+        return False
+
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. 股价在60分钟周期上20均线指标之下
+# 0. KD指标在60分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠
+# 1. KD指标在30分钟周期形成金叉
+class Strategy14(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+    
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_30 = self._data_context.data30mins[stock_sector].get(stock_symbol)
+        if len(dataset_30) == 0:
+            return False
+        valid_30_crossup, result_crossup_30 = \
+            StrategyBasedOnKDAction(dataset_30).executeaction(
+                occurrence_time=[dataset_30.index[-1]], operation='cross_up')
+        if valid_30_crossup:
+            if len(result_crossup_30) > 0:
+                result[DataContext.strategy14] = result_crossup_30
+                return True
+        else:
+            logger.error("strategy_kd_cross_up_30 is failed on {}".format(stock_symbol))
+
+        return False
+
+
+# 0. 成交量在15分钟周期大于5均线
+# 0. KD指标在60分钟周期上在最近5天内至少存在一个连续4个周期的纠缠
+class Strategy201(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_15 = self._data_context.data15mins[stock_sector].get(stock_symbol)
+        dataset_60 = self._data_context.data60mins[stock_sector].get(stock_symbol)
+        if len(dataset_15) == 0 or len(dataset_60) == 0:
+            return False
+        volume_15_values = dataset_15.volume.values
+        avg_15_volume_5 = MA(volume_15_values, 5)
+        if volume_15_values[-1] > avg_15_volume_5[-1]:
+            kd_60 = StrategyBasedOnKDAction(dataset_60)
             valid_60_entangle_period, result_entangle_period_60 = \
                 kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
                                     operation='entangle_within_period',
                                     periods=4,
-                                    duration=40)
+                                    duration=20)
             if valid_60_entangle_period:
                 if len(result_entangle_period_60) > 0:
-                    valid_30_crossup, result_crossup_30 = \
-                        StrategyBasedOnKDAction(dataset_30).executeaction(
-                            occurrence_time=[dataset_30.index[-1]],
-                            operation='cross_up')
-                    if valid_30_crossup:
-                        if len(result_crossup_30) > 0:
-                            results[DataContext.strategy14] = result_crossup_30
-                            resultdata[symbol_tmp] = results
-                    else:
-                        logger.error("strategy_kd_cross_up_30 is failed on {}".format(symbol_tmp))
+                    return True
             else:
-                logger.error("strategy_kd_entangle_60 is failed on {}".format(symbol_tmp))
-    else:
-        logger.error("strategy_price_ma_60 is failed on {}".format(symbol_tmp))
+                logger.error("strategy_kd_entangle_60 is failed on {}".format(stock_symbol))
+            
+        return False
 
-    ma_go_60 = StrategyBasedOnDayKAction(dataset_60)
-    valid_60_ma, result_ma_60 = ma_go_60.executeaction(operation='avg_k_go')
-    if valid_60_ma:
-        if len(result_ma_60) > 0:
-            results[DataContext.strategy102] = result_ma_60
-            resultdata[symbol_tmp] = results
-        else:
+
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. 成交量在15分钟周期大于5均线
+# 0. KD指标在60分钟周期上在最近5天内至少存在一个连续4个周期的纠缠
+# 1. KD指标在15分钟周期形成金叉且小于30
+class Strategy20(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_15 = self._data_context.data15mins[stock_sector].get(stock_symbol)
+        if len(dataset_15) == 0:
             return False
-    else:
-        logger.error("strategy_ma_avg_60 is failed on {}".format(symbol_tmp))
-        return False
-
-    expma_go_60 = StrategyBasedOnDayKAction(dataset_60)
-    valid_60_expema_dif, result_expema_dif_60 = expma_go_60.executeaction(operation='expma_dif_go')
-    if valid_60_expema_dif:
-        if len(result_expema_dif_60) > 0:
-            results[DataContext.strategy104] = result_expema_dif_60
-            resultdata[symbol_tmp] = results
-        else:
-            return False
-    else:
-        logger.error("strategy_expma_dif_go_60 is failed on {}".format(symbol_tmp))
-        return False
-
-    macd_go_60 = StrategyBasedonMACDAction(dataset_60, 2)
-    ismacd_strcit = False
-    ismacd_diff = False
-    valid_60_macd_strict, result_macd_strict_60 = macd_go_60.executeaction(operation='strict')
-    if valid_60_macd_strict:
-        if len(result_macd_strict_60) > 0:
-            results[DataContext.strategy101] = result_macd_strict_60
-            resultdata[symbol_tmp] = results
-            ismacd_strcit = True
-    else:
-        logger.error("strategy_macd_strict_60 is failed on {}".format(symbol_tmp))
-
-    if not ismacd_strcit:
-        valid_60_macd_dif, result_macd_dif_60 = macd_go_60.executeaction(operation='dif')
-        if valid_60_macd_dif:
-            if len(result_macd_dif_60) > 0:
-                results[DataContext.strategy103] = result_macd_dif_60
-                resultdata[symbol_tmp] = results
-                ismacd_diff = True
-        else:
-            logger.error("strategy_macd_diff_60 is failed on {}".format(symbol_tmp))
-
-    if not ismacd_strcit and not ismacd_diff:
-        return False
-
-    '''
-    dataset_30 = context.data30mins[sector_tmp].get(symbol_tmp)
-    kd_cross_30 = StrategyBasedOnKDAction(dataset_30)
-    kd_indicator_30 = KDAction(dataset_30, context.rsv_period, context.k_period, context.d_period)
-    valid_kd_30, k_v_30, d_v_30 = kd_indicator_30.executeaction()
-    ma_cross = CROSSUpMAAction(context.data15mins[sector_tmp].get(symbol_tmp))
-    valid, result_tmp = ma_cross.executeaction(startindex=context.start_i, endindex=context.end_i,
-                                                cross_period=context.cross_sma_period,
-                                                greater_period=context.greater_than_sma_period)
-    if valid:
-        if len(result_tmp) > 0:
-            time_sequence = []
-            for time_stamp_original in result_tmp['time'].array:
-                tmp_date = datetime.date(year=time_stamp_original.year, month=time_stamp_original.month,
-                                         day=time_stamp_original.day)
-                if time_stamp_original.minute == 0:
-                    time_stamp = time_stamp_original
-                elif time_stamp_original.minute <= 30:
-                    time_stamp = pd.Timestamp(datetime.datetime.combine(tmp_date,
-                                                                        datetime.time(
-                                                                            hour=time_stamp_original.hour,
-                                                                            minute=30)))
-                else:
-                    time_stamp = pd.Timestamp(datetime.datetime.combine(tmp_date,
-                                                                        datetime.time(
-                                                                            hour=time_stamp_original.hour + 1)))
-                time_sequence.append(time_stamp)
-
-            if not valid_kd_30:
-                logger.error("strategy_cross_kd_30 is failed on {}".format(symbol_tmp))
-            else:
-                valid, result_tmp = kd_cross_30.executeaction(occurrence_time=time_sequence,
+        valid_15_crossup, result_crossup_15 = \
+            StrategyBasedOnKDAction(dataset_15).executeaction(occurrence_time=[dataset_15.index[-1]],
                                                               operation='cross_up',
-                                                              KValues=k_v_30,
-                                                              DValues=d_v_30,
-                                                              crossvalue=(False, 0))
-                if valid:
-                    # FIXME
-
-                    if len(result_tmp) > 0:
-                        obv_up = OBVUpACTION(context.data30mins[sector_tmp].get(symbol_tmp))
-                        valid, result_tmp = obv_up.executeaction(occurrence_time=result_tmp['time'],
-                                                                 obv_period=context.obv_period,
-                                                                 obv_a_period=context.obv_a_period)
-                        if valid:
-                            if len(result_tmp) > 0:
-                                results[DataContext.strategy1] = result_tmp
-                                resultdata[symbol_tmp] = results
-                        else:
-                            logger.error("strategy_obv_up_30 is failed on {}".format(symbol_tmp))
-
-                    if len(result_tmp) > 0:
-                        results[DataContext.strategy1] = result_tmp
-                        resultdata[symbol_tmp] = results
-                else:
-                    logger.error("strategy_cross_kd_30 is failed on {}".format(symbol_tmp))
-    else:
-        logger.error("strategy_cross_70 is failed on {}".format(symbol_tmp))
-
-    if not valid_kd_30:
-        logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(symbol_tmp))
-    else:
-        valid_30_entangle_crossup_period, result_entangle_crossup_period_30 = \
-            kd_cross_30.executeaction(occurrence_time=[dataset_30.index[-1]],
-                                      operation='entangle_and_cross_up_within_period',
-                                      KValues=k_v_30,
-                                      DValues=d_v_30,
-                                      periods=4,
-                                      duration=80,
-                                      crossvalue=(False, 0))
-        if valid_30_entangle_crossup_period:
-            if len(result_entangle_crossup_period_30) > 0:
-                results[DataContext.strategy6] = result_entangle_crossup_period_30
-                resultdata[symbol_tmp] = results
+                                                              crossvalue=(True, 30))
+        if valid_15_crossup:
+            if len(result_crossup_15) > 0:
+                result[DataContext.strategy20] = result_crossup_15
+                return True
         else:
-            logger.error("strategy_entangle_crossup_kd_30 is failed on {}".format(symbol_tmp))
-
-    valid_60, result_tmp_60 = kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                                           operation='cross_up',
-                                                           crossvalue=(True, 30))
-    if valid_60:
-        if len(result_tmp_60) > 0:
-            results[DataContext.strategy2] = result_tmp_60
-            resultdata[symbol_tmp] = results
-    else:
-        logger.error("strategy_cross_kd_60 is failed on {}".format(symbol_tmp))
-
-    valid_60_entangle, result_entangle_60 = kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                                                                         operation='entangle',
-                                                                         crossvalue=(True, 30),
-                                                                         periods=4)
-    if valid_60_entangle:
-        if len(result_entangle_60) > 0:
-            results[DataContext.strategy3] = result_entangle_60
-            resultdata[symbol_tmp] = results
-    else:
-        logger.error("strategy_entangle_kd_60 is failed on {}".format(symbol_tmp))
-    '''
-
-    valid_60_entangle_crossup_period, result_entangle_crossup_period_60 = \
-        kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                            operation='entangle_and_cross_up_within_period',
-                            periods=4,
-                            duration=40)
-
-    if valid_60_entangle_crossup_period:
-        if len(result_entangle_crossup_period_60) > 0:
-            if ismacd_diff:
-                results[DataContext.strategy7] = result_entangle_crossup_period_60
-            elif ismacd_strcit:
-                results[DataContext.strategy5] = result_entangle_crossup_period_60
-            resultdata[symbol_tmp] = results
-    else:
-        logger.error("strategy_entangle_crossup_period_kd_60 is failed on {}".format(symbol_tmp))
-
-    if not ismacd_strcit:
+            logger.error("strategy_kd_cross_up_15 is failed on {}".format(stock_symbol))
+        
         return False
 
-    valid_60_entangle_crossup, result_entangle_crossup_60 = \
-        kd_60.executeaction(occurrence_time=[dataset_60.index[-1]],
-                            operation='entangle_and_cross_up',
-                            periods=4)
-    if valid_60_entangle_crossup:
-        if len(result_entangle_crossup_60) > 0:
-            results[DataContext.strategy4] = result_entangle_crossup_60
-            resultdata[symbol_tmp] = results
-    else:
-        logger.error("strategy_entangle_crossup_kd_60 is failed on {}".format(symbol_tmp))
 
-    return True
+# 0. 前五日价格振幅平均值大于等于3%
+# 0. 成交量在15分钟周期大于5均线
+# 0. KD指标在60分钟周期上在最近5天内至少存在一个连续4个周期的纠缠
+# 1. KD指标在15分钟周期形成第一个金叉后又在60个15分钟周期内再次形成金叉且小于30
+class Strategy21(CompositeStrategyBase):
+    def __init__(self, data_context: DataContext):
+        super().__init__(data_context)
+
+    def execute_action(self, stock_sector, stock_symbol, result) -> bool:
+        dataset_15 = self._data_context.data15mins[stock_sector].get(stock_symbol)
+        if len(dataset_15) == 0:
+            return False
+        valid_15_crossup, result_crossup_15 = \
+            StrategyBasedOnKDAction(dataset_15).executeaction(occurrence_time=[dataset_15.index[-1]],
+                                                              operation='cross_up_twice',
+                                                              cross_twice_period=60,
+                                                              crossvalue=(True, 30))
+        if valid_15_crossup:
+            if len(result_crossup_15) > 0:
+                result[DataContext.strategy21] = result_crossup_15
+                return True
+        else:
+            logger.error("strategy_kd_cross_up_15 is failed on {}".format(stock_symbol))
+
+        return False
+
+
+class StrategyTree:
+    def __init__(self, strategy: CompositeStrategyBase):
+        self.strategy = strategy
+        self.children: list = []
+
+
+class StrategyContext:
+    strategy_tree: StrategyTree = None
+
+    @classmethod
+    def initklz(cls, data_context: DataContext):
+        # s100
+        StrategyContext.strategy_tree = StrategyTree(Strategy100(data_context))
+        
+        # s101
+        intermediate_node_101 = StrategyTree(Strategy101(data_context))
+        intermediate_node_101.children = [
+                                          # StrategyTree(Strategy1(data_context)),
+                                          # StrategyTree(Strategy2(data_context)),
+                                          # StrategyTree(Strategy3(data_context)),
+                                          StrategyTree(Strategy4(data_context)),
+                                          StrategyTree(Strategy5(data_context))
+                                          # StrategyTree(Strategy6(data_context))
+                                         ]
+        
+        # s103
+        intermediate_node_103 = StrategyTree(Strategy103(data_context))
+        intermediate_node_103.children = [StrategyTree(Strategy7(data_context))]
+
+        # s102
+        intermediate_node_102 = StrategyTree(Strategy102(data_context))
+        intermediate_node_102.children = [intermediate_node_101, intermediate_node_103]
+        
+        # s104
+        intermediate_node_104 = StrategyTree(Strategy104(data_context))
+        intermediate_node_104.children = [StrategyTree(Strategy13(data_context)),
+                                          StrategyTree(Strategy14(data_context))]
+        
+        # s201
+        intermediate_node_201 = StrategyTree(Strategy201(data_context))
+        intermediate_node_201.children = [StrategyTree(Strategy20(data_context)),
+                                          StrategyTree(Strategy21(data_context))]
+        
+        StrategyContext.strategy_tree.children = [intermediate_node_201,
+                                                  intermediate_node_102,
+                                                  intermediate_node_104,
+                                                  StrategyTree(Strategy8(data_context)),
+                                                  StrategyTree(Strategy9(data_context)),
+                                                  StrategyTree(Strategy10(data_context)),
+                                                  StrategyTree(Strategy11(data_context)),
+                                                  StrategyTree(Strategy12(data_context))]
+
+@time_measure
+def quantstrategies(context: DataContext):
+    totalresultdata = {}
+    
+    for sector_usd in context.markets:
+        resultdata = {}
+        sector_tmp = stock_group[sector_usd]
+        for symbol_tmp in context.symbols[sector_tmp]:
+            try:
+                result = {}
+                runStrategies(StrategyContext.strategy_tree, symbol_tmp, sector_tmp, result)
+                resultdata[symbol_tmp] = result
+            except BaseException as be:
+                logger.debug("runStrategies is failed, symbol is {}".format(symbol_tmp))
+                logger.error("runStrategies is failed, symbol is {}".format(symbol_tmp), be)
+        totalresultdata[sector_tmp] = resultdata
+        
+    DataContext.is_first_time_to_run = False
+    
+    return totalresultdata
+
+
+def runStrategies(strategies: StrategyTree, symbol_tmp, sector_tmp, result):
+    if strategies is None or strategies.strategy is None:
+        return
+    if strategies.strategy.execute_action(sector_tmp, symbol_tmp, result):
+        for child in strategies.children:
+            runStrategies(child, symbol_tmp, sector_tmp, result)
+
 
 # FIXME because EM has been obsoleted.
 def calcrankofchange():
@@ -3213,13 +3632,17 @@ def summarytotalresult(context: DataContext):
         for strategy_t, symbols in context.totalresult.items():
             str101 = ""
             if strategy_t == DataContext.strategy6:
-                str101 = "\r\n\r\n\r\n\r\n\r\n策略6 - 30分钟周期\r\n"
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略6 - 30分钟周期:\r\n"
+            elif strategy_t == DataContext.strategy20:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略20:\r\n"
+            elif strategy_t == DataContext.strategy21:
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略21:\r\n"
             elif strategy_t == DataContext.strategy14:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略14 - 30分钟周期:\r\n"
             elif strategy_t == DataContext.strategy13:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略13 - 60分钟周期:\r\n"
             elif strategy_t == DataContext.strategy12:
-                str101 = "\r\n\r\n\r\n\r\n\r\n策略12 - 日周期:\r\n"
+                str101 = "\r\n\r\n\r\n\r\n\r\n策略12 - 60分钟周期:\r\n"
             elif strategy_t == DataContext.strategy11:
                 str101 = "\r\n\r\n\r\n\r\n\r\n策略11 - 60分钟周期:\r\n"
             elif strategy_t == DataContext.strategy10:
@@ -3278,7 +3701,7 @@ def handleresult(context: DataContext):
 
 
 class CalcResult:
-    def __init__(self, ctime, isvgreater: bool):
+    def __init__(self, ctime=None, isvgreater=False):
         self.cross_time = ctime
         self.isgreater_v = isvgreater
 
@@ -3311,88 +3734,77 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     result_h_s12 = set(context.totalresult[DataContext.strategy12].keys())
     result_h_s13 = set(context.totalresult[DataContext.strategy13].keys())
     result_h_s14 = set(context.totalresult[DataContext.strategy14].keys())
+    result_h_s20 = set(context.totalresult[DataContext.strategy20].keys())
+    result_h_s21 = set(context.totalresult[DataContext.strategy21].keys())
 
     keytime = datetime.datetime.now()
-    symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: [], DataContext.strategy4: [],
-               DataContext.strategy5: [], DataContext.strategy6: [], DataContext.strategy100: [], DataContext.strategy101: [],
-               DataContext.strategy102: [], DataContext.strategy7: [], DataContext.strategy103: [], DataContext.strategy8: [],
-               DataContext.strategy104: [], DataContext.strategy9: [], DataContext.strategy10: [], DataContext.strategy11: [],
-               DataContext.strategy12: [], DataContext.strategy13: [], DataContext.strategy14: []}
-    global lock_qm
-    with lock_qm:
-        for time_result, result in result_transient.items():
-            keytime = time_result
-            for index, value in result.items():
-                for index_1, value_1 in value.items():
-                    for index_2, value_2 in value_1.items():
-                        '''
-                        if index_2 == DataContext.strategy1:
-                            for row in value_2.itertuples(index=False):
-                                if row[7]:
-                                    assembleFunc(index_1, DataContext.strategy1)
-                        elif index_2 == DataContext.strategy2:
-                            for row in value_2.itertuples(index=False):
-                                if row[2] <= 50:
-                                    assembleFunc(index_1, DataContext.strategy2)
-                        elif index_2 == DataContext.strategy3:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy3)
-                        '''
-                        if index_2 == DataContext.strategy4:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy4)
-                        elif index_2 == DataContext.strategy5:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy5)
-                        elif index_2 == DataContext.strategy100:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy100)
-                        elif index_2 == DataContext.strategy101:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy101)
-                        elif index_2 == DataContext.strategy102:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy102)
-                        elif index_2 == DataContext.strategy7:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy7)
-                        elif index_2 == DataContext.strategy103:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy103)
-                        elif index_2 == DataContext.strategy104:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy104)
-                        elif index_2 == DataContext.strategy8:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy8)
-                        elif index_2 == DataContext.strategy9:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy9)
-                        elif index_2 == DataContext.strategy10:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy10)
-                        elif index_2 == DataContext.strategy11:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy11)
-                        elif index_2 == DataContext.strategy12:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy12)
-                        elif index_2 == DataContext.strategy13:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy13)
-                        elif index_2 == DataContext.strategy14:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy14)
-                        '''        
-                        elif index_2 == DataContext.strategy6:
-                            for row in value_2.itertuples(index=False):
-                                assembleFunc(index_1, DataContext.strategy6)
-                        '''
-    calcresult(DataContext.strategy100)
-    calcresult(DataContext.strategy101)
-    calcresult(DataContext.strategy102)
-    calcresult(DataContext.strategy103)
-    calcresult(DataContext.strategy104)
+    symbols = {DataContext.strategy1: [], DataContext.strategy2: [], DataContext.strategy3: [],
+               DataContext.strategy4: [], DataContext.strategy5: [], DataContext.strategy6: [],
+               DataContext.strategy7: [], DataContext.strategy8: [], DataContext.strategy9: [],
+               DataContext.strategy10: [], DataContext.strategy11: [], DataContext.strategy12: [],
+               DataContext.strategy13: [], DataContext.strategy14: [], DataContext.strategy20: [],
+               DataContext.strategy21: []}
+
+    for time_result, result in result_transient.items():
+        keytime = time_result
+        for index, value in result.items():
+            for index_1, value_1 in value.items():
+                for index_2, value_2 in value_1.items():
+                    '''
+                    if index_2 == DataContext.strategy1:
+                        for row in value_2.itertuples(index=False):
+                            if row[7]:
+                                assembleFunc(index_1, DataContext.strategy1)
+                    elif index_2 == DataContext.strategy2:
+                        for row in value_2.itertuples(index=False):
+                            if row[2] <= 50:
+                                assembleFunc(index_1, DataContext.strategy2)
+                    elif index_2 == DataContext.strategy3:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy3)
+                    '''
+                    if index_2 == DataContext.strategy4:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy4)
+                    elif index_2 == DataContext.strategy5:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy5)
+                    elif index_2 == DataContext.strategy7:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy7)
+                    elif index_2 == DataContext.strategy8:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy8)
+                    elif index_2 == DataContext.strategy9:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy9)
+                    elif index_2 == DataContext.strategy10:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy10)
+                    elif index_2 == DataContext.strategy11:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy11)
+                    elif index_2 == DataContext.strategy12:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy12)
+                    elif index_2 == DataContext.strategy13:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy13)
+                    elif index_2 == DataContext.strategy14:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy14)
+                    elif index_2 == DataContext.strategy20:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy20)
+                    elif index_2 == DataContext.strategy21:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy21)
+                    '''
+                    elif index_2 == DataContext.strategy6:
+                        for row in value_2.itertuples(index=False):
+                            assembleFunc(index_1, DataContext.strategy6)
+                    '''
+                    
     # result_c_s1 = calcresult(DataContext.strategy1)
     # result_c_s2 = calcresult(DataContext.strategy2)
     # result_c_s3 = calcresult(DataContext.strategy3)
@@ -3406,6 +3818,8 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     result_c_s12 = calcresult(DataContext.strategy12)
     result_c_s13 = calcresult(DataContext.strategy13)
     result_c_s14 = calcresult(DataContext.strategy14)
+    result_c_s20 = calcresult(DataContext.strategy20)
+    result_c_s21 = calcresult(DataContext.strategy21)
     # result_c_s6 = calcresult(DataContext.strategy6)
     # result_c_s1_2 = result_c_s1.intersection(result_c_s2).union(result_c_s1.intersection(result_h_s2))
     # result_h_s1_2 = result_h_s1.intersection(result_h_s2).union(result_h_s1.intersection(result_c_s2))
@@ -3427,7 +3841,9 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
                      DataContext.strategy2: [result_c_s2, result_h_s2],
                      # DataContext.strategy6: [result_c_s6, result_h_s6]}}
     '''
-    ret = {keytime: {DataContext.strategy14: [result_c_s14, result_h_s14],
+    ret = {keytime: {DataContext.strategy20: [result_c_s20, result_h_s20],
+                     DataContext.strategy21: [result_c_s21, result_h_s21],
+                     DataContext.strategy14: [result_c_s14, result_h_s14],
                      DataContext.strategy13: [result_c_s13, result_h_s13],
                      DataContext.strategy12: [result_c_s12, result_h_s12],
                      DataContext.strategy11: [result_c_s11, result_h_s11],
@@ -3539,6 +3955,18 @@ def handleresultlocked(resultf, context: DataContext):
                     str101 += "  0. EXPMA指标在60分钟周期上快线当前向上\r\n"
                     str101 += "  1. KD指标在30分钟周期上在最近10天内至少存在一个至少连续4个周期的纠缠\r\n"
                     str101 += "  2. KD指标在30分钟周期形成金叉\r\n\r\n"
+                elif strategy_t == DataContext.strategy20:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略20 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  0. 成交量在15分钟周期大于5均线\r\n"
+                    str101 += "  0. KD指标在60分钟周期上在最近5天内至少存在一个至少连续4个周期的纠缠\r\n"
+                    str101 += "  1. KD指标在15分钟周期形成金叉且小于30\r\n\r\n"
+                elif strategy_t == DataContext.strategy21:
+                    str101 = "\r\n\r\n\r\n\r\n\r\n策略21 - 预警条件为:\r\n"
+                    str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
+                    str101 += "  0. 成交量在15分钟周期大于5均线\r\n"
+                    str101 += "  0. KD指标在60分钟周期上在最近5天内至少存在一个至少连续4个周期的纠缠\r\n"
+                    str101 += "  1. KD指标在15分钟周期形成第一个金叉后又在60个15分钟周期内再次形成金叉且小于30\r\n\r\n"
                 elif strategy_t == DataContext.strategy14:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略14 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
@@ -3555,7 +3983,7 @@ def handleresultlocked(resultf, context: DataContext):
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略12 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
                     str101 += "  1. 当前K线值大于前五天的kd金叉的交叉点的5%\r\n"
-                    str101 += "  1. 当前收盘价比前五天内的最低价再低1%\r\n"
+                    str101 += "  2. 当前收盘价比前五天内的最低价再低1%\r\n"
                 elif strategy_t == DataContext.strategy11:
                     str101 = "\r\n\r\n\r\n\r\n\r\n策略11 - 预警条件为:\r\n"
                     str101 += "  0. 前五日价格振幅平均值大于等于3%\r\n"
@@ -3635,13 +4063,15 @@ def handleresultlocked(resultf, context: DataContext):
 
 def sendemail(email_subject: str, email_content: str, recipient: str):
     msg = EmailMessage()
-    msg["From"] = DataContext.email_recipient
+    msg["From"] = DataContext.email_sender
     msg["To"] = recipient
     msg["Subject"] = email_subject
     msg.set_content(email_content)
     try:
-        with smtplib.SMTP_SSL("smtp.sina.com", 465) as smtp:
-            smtp.login(DataContext.email_recipient, "f7556624333b77f3")
+        with smtplib.SMTP_SSL(DataContext.smtp_address,
+                              DataContext.smtp_port) as smtp:
+            smtp.set_debuglevel(1)
+            smtp.login(DataContext.email_sender, DataContext.email_pwd)
             smtp.send_message(msg)
     except Exception as ee:
         logger.error("error >>>", ee)
@@ -3670,7 +4100,7 @@ def updatedatabase(is_auto=False, source: DataSource = DataSource.AK_SHARE, cont
     if is_auto:
         timedelta = datetime.timedelta(minutes=10)
         today = datetime.date.today()
-        time_download = datetime.datetime.combine(today, datetime.time(hour=16, minute=30))
+        time_download = datetime.datetime.combine(today, datetime.time(hour=18))
         while True:
             if (datetime.datetime.now() - time_download) > timedelta:
                 break
@@ -3835,6 +4265,7 @@ def pre_exec(country: CountryCode):
     # login_em()
     DataContext.initklz(country)
     data_context = DataContext()
+    StrategyContext.initklz(data_context)
     loadsectors(data_context)
     return data_context
 
@@ -3930,7 +4361,7 @@ if __name__ == '__main__':
     # login_em(isforcelogin=False)
     # loaddata(["科创板"], 2, datasource=DataSource.EAST_MONEY)
     # loaddata(DataContext.markets, 2, datasource=DataSource.EAST_MONEY, period=240, type_func=2)
-
+    
     dcon = pre_exec(CountryCode.CHINA)
     # dcon = pre_exec(CountryCode.US)
     t = threading.Thread(target=handleresult, args=(dcon,))
@@ -3941,11 +4372,11 @@ if __name__ == '__main__':
     '''
     DataContext.initklz(CountryCode.CHINA)
     # updatedatabase(source=DataSource.EFINANCE)
-    loaddata(["科创板"], 2, datasource=DataSource.EFINANCE)
-    '''
+    # loaddata(["主板", "科创板", "创业板", "中小企业板", "主板A股"], 2, datasource=DataSource.EFINANCE)
+    loaddata(["主板A股"], 3, c_point=600446, datasource=DataSource.EFINANCE)
     # DataContext.country = CountryCode.CHINA
     # checksymbols()
-
+    '''
     # DataContext.initklz(CountryCode.CHINA)
     # backtest(DataContext())
     # calconhistory(DataContext())
