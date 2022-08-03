@@ -29,7 +29,7 @@ pd.set_option('display.unicode.east_asian_width', True)
 # 显示所有列
 pd.set_option('display.max_columns', None)
 # 显示所有行
-pd.set_option('display.max_rows', None)
+# pd.set_option('display.max_rows', None)
 
 
 log.basicConfig(level=log.DEBUG,
@@ -127,6 +127,11 @@ class DataContext:
     smtp_address = "smtp.163.com"
     smtp_port = 465
 
+    sectors_CN = {'000001': "优选股关注"}
+
+    sectors_US = {'000001': "优选股关注",
+                  '201001': "中概股"}
+
     code_spotlighted = [7171, 2901, 300571, 2634, 300771, 603871, 603165, 603755, 2950, 688178,
                         603506, 603757, 537, 600167, 300765, 603327, 603360, 300738, 688026, 300800,
                         600452, 603277, 300497, 603380, 603848, 600477, 603697, 2768, 300701, 2973,
@@ -149,10 +154,10 @@ class DataContext:
     def initklz(cls, country_param: CountryCode):
         DataContext.country = country_param
         if DataContext.iscountryChina():
-            DataContext.limitfordatafetched = 160
-            DataContext.limitfordatafetched_30 = 160
+            DataContext.limitfordatafetched = 320
+            DataContext.limitfordatafetched_30 = 320
             DataContext.limitfordatafetched_60 = 320
-            DataContext.limitfordatafetched_240 = 128
+            DataContext.limitfordatafetched_240 = 160
             DataContext.markets = ["创业板", "中小企业板", "主板A股", "主板", "科创板"]
             DataContext.marketopentime = datetime.time(hour=9, minute=30)
             DataContext.marketclosetime = datetime.time(hour=15)
@@ -334,6 +339,8 @@ class DataContext:
                             DataContext.strategy14: {}, DataContext.strategy20: {},
                             DataContext.strategy21: {}}
         self.sectors = {}
+        
+        self.sectors_first_30 = []
 
         logger.debug("Initialization of context is done.")
 
@@ -497,7 +504,8 @@ time_windows_30 = [0 for i in range(100)]  # set 100 so as to test after market
 time_windows_60 = [0 for i in range(100)]  # set 100 so as to test after market
 
 
-sectors_CN = {'000001': "优选股关注",
+
+'''
               '007180': "券商概念",
               '007224': "大飞机",
               '007315': "半导体",
@@ -801,12 +809,8 @@ sectors_CN = {'000001': "优选股关注",
               '007375': "华为汽车",
               '007376': "换电概念",
               '007377': "CAR - T细胞疗法",
-              '073259': "碳交易"}
-
-
-sectors_US = {'000001': "优选股关注",
-              '201001': "中概股"}
-
+              '073259': "碳交易"
+'''
 
 # param: echo=True that is used to show each sql statement used in query
 engine = create_engine("postgresql+psycopg2://Raymond:123123@localhost:5432/Raymond", encoding='utf-8')
@@ -1127,8 +1131,8 @@ def insertdata(exchange: str, group: str, symbols: list, retried, datasource: Da
                     freq = 15
                     stock_zh_df_tmp: pd.DataFrame = ef.stock.get_quote_history(
                         str(symbol_i), klt=freq,
-                        beg=(datetime.datetime.today() - datetime.timedelta(days=0)).strftime("%Y%m%d"),
-                        end=(datetime.datetime.today() - datetime.timedelta(days=0)).strftime("%Y%m%d"),
+                        beg=(datetime.datetime.today() - datetime.timedelta(days=2)).strftime("%Y%m%d"),
+                        end=(datetime.datetime.today() - datetime.timedelta(days=1)).strftime("%Y%m%d"),
                         fqt=0)
                 if isinstance(stock_zh_df_tmp, pd.DataFrame) and len(stock_zh_df_tmp) > 0:
                     update_database(exchange, symbol_i, stock_zh_df_tmp, datasource)
@@ -2354,6 +2358,7 @@ class StockData:
 def loadsectors(context: DataContext):
     if not DataContext.iscountryChina():
         return
+    ''' the commented out codes are deprecated
     filename = "sectors_allocation"
     filepath = os.path.join(r'./', filename)
     append_value(context.sectors, '000001', [str(code).zfill(6) for code in DataContext.code_spotlighted])
@@ -2365,14 +2370,98 @@ def loadsectors(context: DataContext):
                 if len(symbols) > 1:
                     for symbol in symbols:
                         append_value(context.sectors, sector_symbols[0], symbol)
+    '''
+    
+    filename = "sectors_list"
+    path1 = pathlib.Path(os.path.join(root_path, filename))
+    if path1.exists():
+        if path1.is_file():
+            with open(path1, 'r') as file_sector:
+                for line in file_sector.read().splitlines():
+                    sector_code_name = line.split(":")
+                    if len(sector_code_name) > 1:
+                        append_value(DataContext.sectors_CN, sector_code_name[0], sector_code_name[1])
+        else:
+            logger.error("The sectors_list is not a file!!!")
 
+    else:
+        concept_names = ak.stock_board_concept_name_em()
+        try:
+            for row in concept_names.itertuples(index=False):
+                # row[2] is sector code
+                # row[1] is sector name
+                append_value(DataContext.sectors_CN, row[2], row[1])
+        except BaseException as be:
+            logger.error("It is failed to retrieve info about concept sectors.")
+
+        with open(path1, 'w+') as file_sector:
+            for sector_code in DataContext.sectors_CN:
+                if sector_code != '000001':
+                    file_sector.writelines(":".join([sector_code, DataContext.sectors_CN[sector_code]]))
+                    file_sector.write('\r\n')
+
+    filename = "sectors_map"
+    path2 = pathlib.Path(os.path.join(root_path, filename))
+    if path2.exists():
+        if path2.is_file():
+            with open(path2, 'r') as file_sector:
+                for line in file_sector.read().splitlines():
+                    sector_symbols = line.split(":")
+                    if len(sector_symbols) > 1:
+                        symbols = sector_symbols[1].split(",")
+                        if len(symbols) > 1:
+                            for symbol in symbols:
+                                append_value(context.sectors, sector_symbols[0], symbol)
+        else:
+            logger.error("The sectors_map is not a file!!!")
+        
+    else:
+        for sector_code in DataContext.sectors_CN:
+            if sector_code != '000001':
+                try:
+                    concept_cons: pd.DataFrame = ak.stock_board_concept_cons_em(stock_board_code=str(sector_code))
+                    for stock_symbol in concept_cons['代码'].tolist():
+                        append_value(context.sectors, sector_code, stock_symbol)
+                except BaseException as be:
+                    logger.error("The concept sector %s doesn't exist." % sector_code)
+
+        with open(path2, 'w+') as file_sector:
+            for sector_code in context.sectors:
+                if sector_code != '000001':
+                    file_sector.write('{}:'.format(sector_code))
+                    symbolsinsector = []
+                    sector_symbols = context.sectors[sector_code]
+                    if isinstance(sector_symbols, list):
+                        for sector_symbol in sector_symbols:
+                            symbolsinsector.append(sector_symbol)
+                    else:
+                        symbolsinsector.append(sector_symbols)
+                    file_sector.writelines(",".join(symbolsinsector))
+                    file_sector.write('\r\n')
+
+    append_value(context.sectors, '000001', [str(code).zfill(6) for code in DataContext.code_spotlighted])
+    
+
+def calcFirst30Sectors(context: DataContext):
+    tmp = context.sectors_first_30
+    try:
+        context.sectors_first_30.clear()
+        concept_names = ak.stock_board_concept_name_em()
+        for row in concept_names.itertuples(index=False):
+            if row[0] <= 30:
+                context.sectors_first_30.append(str(row[2]))
+            else:
+                break
+    except BaseException as be:
+        logger.error("It is failed to retrieve rank info about concept sectors.")
+        context.sectors_first_30 = tmp
 
 def loadsectorsfromEM():
     date_t = datetime.datetime.today().replace(hour=0, minute=0, second=0, microsecond=0).strftime("%Y-%m-%d")
     if DataContext.iscountryChina():
-        sectors = sectors_CN.keys()
+        sectors = DataContext.sectors_CN.keys()
     elif DataContext.iscountryUS():
-        sectors = sectors_US.keys()
+        sectors = DataContext.sectors_US.keys()
     filename = "sectors_allocation"
     filepath = os.path.join(r'./', filename)
     with open(filepath, 'w+') as file:
@@ -2406,7 +2495,8 @@ firstroundresult_60 = 0
 fetch_count = 1
 
 def snapshot(context: DataContext):
-    # 1) rank sectors over previous consecutive 10 business days
+    # 1) (deprecated) rank sectors over previous consecutive 10 business days
+    # 1) sort out the first 30 concept sectors
     # 2) start fetching data once market is open
     # 3) get a snapshot of stocks depending on country every other 3 seconds according to limitation
     # 4) update stock data in context
@@ -2746,6 +2836,7 @@ def snapshot(context: DataContext):
             timecondition = (((current_time - opentime) >= target_time) and ((closetime - current_time) >= target_time))
         
         if timecondition:
+            calcFirst30Sectors(context)
             if update_stock_data_in_context():
                 # 3) calculate indicators
                 logger.debug("run 12 strategies")
@@ -3547,7 +3638,7 @@ def calcrankofchange():
             logger.error("ErrorCode is %d and ErrorMsg is %s" % (date_offset.ErrorCode, date_offset.ErrorMsg))
             return False
         # 区间涨跌幅(流通市值加权平均):CPPCTCHANGEFMWAVG 区间资金净流入:PNETINFLOWSUM
-        sectors_q = list(sectors_CN.keys())
+        sectors_q = list(DataContext.sectors_CN.keys())
         i = 1
         sectors_length = len(sectors_q) - 6
         sectors_v = []
@@ -3587,7 +3678,7 @@ def calcrankofchange():
             e_content += tmp_str
             for index in list_sectors_change:
                 column = sectors_df_change_d['CPPCTCHANGEFMWAVG']
-                sector_name = sectors_CN[index.lstrip(prefix)]
+                sector_name = DataContext.sectors_CN[index.lstrip(prefix)]
                 tmp_str = "版块名称: {} -- 幅度: {}% \r\n".format(sector_name, column[index])
                 file.write(tmp_str)
                 e_content += tmp_str
@@ -3596,7 +3687,7 @@ def calcrankofchange():
             e_content += tmp_str
             for index in list_sectors_change_r:
                 column = sectors_df_change_d['CPPCTCHANGEFMWAVG']
-                sector_name = sectors_CN[index.lstrip(prefix)]
+                sector_name = DataContext.sectors_CN[index.lstrip(prefix)]
                 tmp_str = "版块名称: {} -- 幅度: {}% \r\n".format(sector_name, column[index])
                 file.write(tmp_str)
                 e_content += tmp_str
@@ -3605,7 +3696,7 @@ def calcrankofchange():
             e_content += tmp_str
             for index in list_sectors_mf:
                 column = sectors_df_mf_d['PNETINFLOWSUM']
-                sector_name = sectors_CN[index.lstrip(prefix)]
+                sector_name = DataContext.sectors_CN[index.lstrip(prefix)]
                 tmp_str = "版块名称: {} -- 资金: {} \r\n".format(sector_name, column[index])
                 file.write(tmp_str)
                 e_content += tmp_str
@@ -3614,7 +3705,7 @@ def calcrankofchange():
             e_content += tmp_str
             for index in list_sectors_mf_r:
                 column = sectors_df_mf_d['PNETINFLOWSUM']
-                sector_name = sectors_CN[index.lstrip(prefix)]
+                sector_name = DataContext.sectors_CN[index.lstrip(prefix)]
                 tmp_str = "版块名称: {} -- 资金: {} \r\n".format(sector_name, column[index])
                 file.write(tmp_str)
                 e_content += tmp_str
@@ -3867,25 +3958,27 @@ def handleresultlocked(resultf, context: DataContext):
         email_p: str = ""
         none_sector = "无归属版块"
         if DataContext.iscountryChina():
-            sectornames = sectors_CN
+            sectornames = DataContext.sectors_CN
             spotlightedsector = sectornames['000001']
             print_order = [spotlightedsector]
         else:
-            sectornames = sectors_US
+            sectornames = DataContext.sectors_US
             spotlightedsector = sectornames['000001']
             print_order = [spotlightedsector]
         for symbol_c in result_t:
             for index_s, value_s in context.sectors.items():
-                if (isinstance(value_s, list) and symbol_c in value_s) or symbol_c == value_s:
+                if index_s in context.sectors_first_30 and ((isinstance(value_s, list) and symbol_c in value_s) or symbol_c == value_s):
                     append_value(result_ch, sectornames[index_s], symbol_c)
                     break
             else:
-                append_value(result_ch, none_sector, symbol_c)
+                # append_value(result_ch, none_sector, symbol_c)
+                pass
         for index_s in result_ch:
             if index_s != none_sector and index_s != spotlightedsector:
                 print_order.append(index_s)
         else:
-            print_order.append(none_sector)
+            # print_order.append(none_sector)
+            pass
         for index_s_o in print_order:
             if index_s_o not in result_ch:
                 continue
@@ -3939,12 +4032,20 @@ def handleresultlocked(resultf, context: DataContext):
         emailcontent_i += result_hm
         return emailcontent_i, emailcontent_em_i
 
+    sectors_30 = "\r\n当前涨幅前30名的概念板块:\r\n"
+    sector_names = []
+    for sector_code in context.sectors_first_30:
+        sector_names.append(DataContext.sectors_CN[sector_code])
+    sectors_30 += " ".join(sector_names)
+    emailcontent += sectors_30
+    
     # output format symbol
     for time_result, result in resultf.items():
         filename = "result_" + time_result.strftime("%Y%m%d_%H%M")
         filename_em = "EM_" + filename
         filepath = os.path.join(DataContext.dir_name, filename)
         with open(filepath, 'w+') as file:
+            file.write(sectors_30)
             for strategy_t, symbols_l in result.items():
                 str101 = ""
                 if strategy_t == DataContext.strategy6:
@@ -4373,7 +4474,7 @@ if __name__ == '__main__':
     DataContext.initklz(CountryCode.CHINA)
     # updatedatabase(source=DataSource.EFINANCE)
     # loaddata(["主板", "科创板", "创业板", "中小企业板", "主板A股"], 2, datasource=DataSource.EFINANCE)
-    loaddata(["主板A股"], 3, c_point=600446, datasource=DataSource.EFINANCE)
+    loaddata(["中小企业板", "主板A股"], 2, datasource=DataSource.EFINANCE)
     # DataContext.country = CountryCode.CHINA
     # checksymbols()
     '''
@@ -4391,3 +4492,4 @@ if __name__ == '__main__':
     # DataContext.country = CountryCode.US
     # loaddata(["NASDAQ", "NYSE", "AMEX"], 2, datasource=DataSource.YAHOO)
     # loaddata(["NASDAQ"], 3, c_point='AMBA', datasource=DataSource.YAHOO)
+    
