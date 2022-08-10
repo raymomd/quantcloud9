@@ -1131,8 +1131,8 @@ def insertdata(exchange: str, group: str, symbols: list, retried, datasource: Da
                     freq = 15
                     stock_zh_df_tmp: pd.DataFrame = ef.stock.get_quote_history(
                         str(symbol_i), klt=freq,
-                        beg=(datetime.datetime.today() - datetime.timedelta(days=2)).strftime("%Y%m%d"),
-                        end=(datetime.datetime.today() - datetime.timedelta(days=1)).strftime("%Y%m%d"),
+                        beg=(datetime.datetime.today() - datetime.timedelta(days=0)).strftime("%Y%m%d"),
+                        end=(datetime.datetime.today() - datetime.timedelta(days=0)).strftime("%Y%m%d"),
                         fqt=0)
                 if isinstance(stock_zh_df_tmp, pd.DataFrame) and len(stock_zh_df_tmp) > 0:
                     update_database(exchange, symbol_i, stock_zh_df_tmp, datasource)
@@ -2394,7 +2394,7 @@ def loadsectors(context: DataContext):
         except BaseException as be:
             logger.error("It is failed to retrieve info about concept sectors.")
 
-        with open(path1, 'w+') as file_sector:
+        with open(path1, 'w') as file_sector:
             for sector_code in DataContext.sectors_CN:
                 if sector_code != '000001':
                     file_sector.writelines(":".join([sector_code, DataContext.sectors_CN[sector_code]]))
@@ -2412,6 +2412,29 @@ def loadsectors(context: DataContext):
                         if len(symbols) > 1:
                             for symbol in symbols:
                                 append_value(context.sectors, sector_symbols[0], symbol)
+            with open(path2, 'a+') as file_sector:
+                for sector_code in DataContext.sectors_CN:
+                    if sector_code == '000001':
+                        continue
+                    elif sector_code not in context.sectors:
+                        try:
+                            concept_cons: pd.DataFrame = ak.stock_board_concept_cons_em(
+                                                                stock_board_code=str(sector_code))
+                            for stock_symbol in concept_cons['代码'].tolist():
+                                append_value(context.sectors, sector_code, stock_symbol)
+                            file_sector.write('{}:'.format(sector_code))
+                            symbolsinsector = []
+                            sector_symbols = context.sectors[sector_code]
+                            if isinstance(sector_symbols, list):
+                                for sector_symbol in sector_symbols:
+                                    symbolsinsector.append(sector_symbol)
+                            else:
+                                symbolsinsector.append(sector_symbols)
+                            file_sector.writelines(",".join(symbolsinsector))
+                            file_sector.write('\r\n')
+                        except BaseException as be:
+                            logger.error("The concept sector %s doesn't exist." % sector_code)
+
         else:
             logger.error("The sectors_map is not a file!!!")
         
@@ -2419,13 +2442,14 @@ def loadsectors(context: DataContext):
         for sector_code in DataContext.sectors_CN:
             if sector_code != '000001':
                 try:
-                    concept_cons: pd.DataFrame = ak.stock_board_concept_cons_em(stock_board_code=str(sector_code))
+                    concept_cons: pd.DataFrame = ak.stock_board_concept_cons_em(
+                                                    stock_board_code=str(sector_code))
                     for stock_symbol in concept_cons['代码'].tolist():
                         append_value(context.sectors, sector_code, stock_symbol)
                 except BaseException as be:
                     logger.error("The concept sector %s doesn't exist." % sector_code)
 
-        with open(path2, 'w+') as file_sector:
+        with open(path2, 'w') as file_sector:
             for sector_code in context.sectors:
                 if sector_code != '000001':
                     file_sector.write('{}:'.format(sector_code))
@@ -2839,7 +2863,7 @@ def snapshot(context: DataContext):
             calcFirst30Sectors(context)
             if update_stock_data_in_context():
                 # 3) calculate indicators
-                logger.debug("run 12 strategies")
+                logger.debug("run 3 strategies")
                 try:
                     result = {current_time: quantstrategies(context)}
                 except Exception as ee:
@@ -3589,12 +3613,12 @@ class StrategyContext:
                                           StrategyTree(Strategy21(data_context))]
         
         StrategyContext.strategy_tree.children = [intermediate_node_201,
-                                                  intermediate_node_102,
-                                                  intermediate_node_104,
-                                                  StrategyTree(Strategy8(data_context)),
-                                                  StrategyTree(Strategy9(data_context)),
-                                                  StrategyTree(Strategy10(data_context)),
-                                                  StrategyTree(Strategy11(data_context)),
+                                                  # intermediate_node_102,
+                                                  # intermediate_node_104,
+                                                  # StrategyTree(Strategy8(data_context)),
+                                                  # StrategyTree(Strategy9(data_context)),
+                                                  # StrategyTree(Strategy10(data_context)),
+                                                  # StrategyTree(Strategy11(data_context)),
                                                   StrategyTree(Strategy12(data_context))]
 
 @time_measure
@@ -3934,16 +3958,18 @@ def mergeresult(context: DataContext, result_transient, ishistory: bool = False)
     '''
     ret = {keytime: {DataContext.strategy20: [result_c_s20, result_h_s20],
                      DataContext.strategy21: [result_c_s21, result_h_s21],
-                     DataContext.strategy14: [result_c_s14, result_h_s14],
-                     DataContext.strategy13: [result_c_s13, result_h_s13],
+                     # DataContext.strategy14: [result_c_s14, result_h_s14],
+                     # DataContext.strategy13: [result_c_s13, result_h_s13],
                      DataContext.strategy12: [result_c_s12, result_h_s12],
-                     DataContext.strategy11: [result_c_s11, result_h_s11],
-                     DataContext.strategy8: [result_c_s8, result_h_s8],
-                     DataContext.strategy10: [result_c_s10, result_h_s10],
-                     DataContext.strategy9: [result_c_s9, result_h_s9],
-                     DataContext.strategy7: [result_c_s7, result_h_s7],
-                     DataContext.strategy5: [result_c_s5, result_h_s5],
-                     DataContext.strategy4: [result_c_s4, result_h_s4]}}
+                     # DataContext.strategy11: [result_c_s11, result_h_s11],
+                     # DataContext.strategy8: [result_c_s8, result_h_s8],
+                     # DataContext.strategy10: [result_c_s10, result_h_s10],
+                     # DataContext.strategy9: [result_c_s9, result_h_s9],
+                     # DataContext.strategy7: [result_c_s7, result_h_s7],
+                     # DataContext.strategy5: [result_c_s5, result_h_s5],
+                     # DataContext.strategy4: [result_c_s4, result_h_s4]
+                     }
+           }
     return ret
 
 
@@ -4034,8 +4060,13 @@ def handleresultlocked(resultf, context: DataContext):
 
     sectors_30 = "\r\n当前涨幅前30名的概念板块:\r\n"
     sector_names = []
-    for sector_code in context.sectors_first_30:
-        sector_names.append(DataContext.sectors_CN[sector_code])
+    tmp_sector_code = ''
+    try:
+        for sector_code in context.sectors_first_30:
+            tmp_sector_code = sector_code
+            sector_names.append(DataContext.sectors_CN[sector_code])
+    except BaseException as be:
+        logger.error("The sector({}) doesn't exist!!!".format(tmp_sector_code))
     sectors_30 += " ".join(sector_names)
     emailcontent += sectors_30
     
@@ -4382,6 +4413,11 @@ def post_exec(context: DataContext):
         getdbconn().cursor().close()
         getdbconn().close()
     logger.debug("PostgreSQL connection is closed")
+    filename = "sectors_list"
+    path1 = pathlib.Path(os.path.join(root_path, filename))
+    if path1.exists():
+        path1.unlink()
+        logger.debug("The file sectors_list is deleted")
 
 
 def backtest(context: DataContext):
@@ -4464,17 +4500,18 @@ if __name__ == '__main__':
     # loaddata(DataContext.markets, 2, datasource=DataSource.EAST_MONEY, period=240, type_func=2)
     
     dcon = pre_exec(CountryCode.CHINA)
+    '''
     # dcon = pre_exec(CountryCode.US)
     t = threading.Thread(target=handleresult, args=(dcon,))
     t.start()
     snapshot(dcon)
     time.sleep(60)
     post_exec(dcon)
-    '''
+    
     DataContext.initklz(CountryCode.CHINA)
     # updatedatabase(source=DataSource.EFINANCE)
-    # loaddata(["主板", "科创板", "创业板", "中小企业板", "主板A股"], 2, datasource=DataSource.EFINANCE)
-    loaddata(["中小企业板", "主板A股"], 2, datasource=DataSource.EFINANCE)
+    loaddata(["主板", "科创板", "创业板", "中小企业板", "主板A股"], 2, datasource=DataSource.EFINANCE)
+    # loaddata(["中小企业板", "主板A股"], 2, datasource=DataSource.EFINANCE)
     # DataContext.country = CountryCode.CHINA
     # checksymbols()
     '''
